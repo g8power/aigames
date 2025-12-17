@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI 英語教練 v3.0 (多元題型)</title>
+    <title>AI 英語教練 v3.1</title>
     <style>
         :root {
             --primary: #6c5ce7;
@@ -47,7 +47,7 @@
         /* Inputs */
         input[type="text"], input[type="password"] {
             width: 100%; padding: 15px; border: 2px solid #dfe6e9; border-radius: 12px; 
-            font-size: 1.1rem; margin: 15px 0; outline: none; transition: 0.3s;
+            font-size: 1.1rem; margin: 10px 0; outline: none; transition: 0.3s;
             background: #fdfdfd;
         }
         input:focus { border-color: var(--primary); background: #fff; }
@@ -61,6 +61,7 @@
         }
         button.action-btn:active { transform: scale(0.98); }
         button.secondary { background: #b2bec3; box-shadow: none; color: #2d3436; }
+        button.info-btn { background: #0984e3; box-shadow: 0 4px 6px rgba(9, 132, 227, 0.2); }
         
         /* Multiple Choice Buttons */
         .options-grid {
@@ -109,12 +110,15 @@
             display: none; justify-content: center; align-items: center; z-index: 100;
         }
         .modal-content { max-height: 85vh; overflow-y: auto; text-align: left; }
+        
+        /* Model List Box */
+        pre { background: #eee; padding: 10px; border-radius: 8px; text-align: left; font-size: 0.85rem; overflow-x: auto; white-space: pre-wrap; color: #333; border: 1px solid #ccc; margin-top: 5px; max-height: 150px; overflow-y: auto;}
     </style>
 </head>
 <body>
 
 <header>
-    <span>Daily English AI v3.0</span>
+    <span>Daily English AI v3.1</span>
     <button id="settings-btn" onclick="openApiModal()">⚙️</button>
 </header>
 
@@ -122,14 +126,21 @@
     <div class="card modal-content">
         <h3 style="margin-top:0;">設定 (Settings)</h3>
         
-        <label style="font-size:0.9rem; font-weight:bold;">API Key:</label>
+        <label style="font-size:0.9rem; font-weight:bold;">1. API Key:</label>
         <input type="password" id="api-key-input" placeholder="貼上 Google Gemini API Key...">
         
-        <label style="font-size:0.9rem; font-weight:bold; margin-top:10px;">Model Name:</label>
+        <label style="font-size:0.9rem; font-weight:bold; margin-top:10px;">2. Model Name:</label>
         <input type="text" id="model-name-input" value="gemini-2.0-flash-exp">
         
-        <button class="action-btn" onclick="saveSettings()">儲存 (Save)</button>
-        <button class="action-btn secondary" onclick="closeApiModal()">取消 (Cancel)</button>
+        <button class="action-btn info-btn" onclick="checkAvailableModels()" style="margin-bottom: 5px;">🔍 檢查可用模型 (List Models)</button>
+        <div id="model-list-result" style="display:none; width:100%;">
+            <pre id="model-list-text"></pre>
+        </div>
+
+        <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px; width: 100%;">
+            <button class="action-btn" onclick="saveSettings()">儲存 (Save)</button>
+            <button class="action-btn secondary" onclick="closeApiModal()">取消 (Cancel)</button>
+        </div>
     </div>
 </div>
 
@@ -208,7 +219,7 @@
         const levelNames = ["Beginner", "Elementary", "Intermediate", "Upper-Intermediate", "Advanced"];
         const levelName = levelNames[level - 1] || "Beginner";
 
-        // 更複雜的 Prompt，要求多樣化題型
+        // Prompt (v3.0)
         const prompt = `
             Act as an expert English teacher. Generate ${TOTAL_QUESTIONS} distinct English questions for a "${levelName}" level student.
             
@@ -262,8 +273,41 @@
 
         } catch (error) {
             console.error(error);
-            alert("生成失敗: " + error.message + "\n請嘗試更換 Model 名稱。");
+            alert("生成失敗: " + error.message + "\n請在設定頁面使用「檢查可用模型」確認名稱是否正確。");
             return null;
+        }
+    }
+
+    // --- Utility: List Models (Restored from v2.0) ---
+    async function checkAvailableModels() {
+        const keyInput = document.getElementById('api-key-input').value.trim();
+        if (!keyInput) { alert("請先輸入 API Key 才能查詢"); return; }
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${keyInput}`;
+        document.getElementById('model-list-result').style.display = 'block';
+        document.getElementById('model-list-text').innerText = "查詢中 (Querying Google API)...";
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+            
+            if (data.models) {
+                // 幫使用者過濾出適合的 flash/pro 模型
+                const names = data.models
+                    .map(m => m.name.replace('models/', ''))
+                    .filter(n => n.includes('flash') || n.includes('pro'))
+                    .join('\n');
+                
+                if(names.length === 0) {
+                     document.getElementById('model-list-text').innerText = "未找到常見模型 (flash/pro)，以下是所有列表:\n" + data.models.map(m => m.name).join('\n');
+                } else {
+                    document.getElementById('model-list-text').innerText = "✅ 建議使用以下模型:\n" + names;
+                }
+            } else {
+                document.getElementById('model-list-text').innerText = "錯誤: " + JSON.stringify(data, null, 2);
+            }
+        } catch (e) {
+            document.getElementById('model-list-text').innerText = "連線失敗: " + e.message;
         }
     }
 
