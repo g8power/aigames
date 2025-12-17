@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>七龍珠Z：精靈圖激戰</title>
+    <style>
+        body {
+            margin: 0; padding: 0; overflow: hidden;
+            background-color: #222;
+            font-family: 'Arial Black', sans-serif;
+            user-select: none; cursor: crosshair;
+        }
+        #loading-screen {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #FFD700; font-size: 30px; text-shadow: 2px 2px 4px #FF4500;
+        }
+        #ui-layer {
+            position: absolute; top: 20px; left: 20px; pointer-events: none;
+            color: #fff; z-index: 10; text-transform: uppercase;
+            text-shadow: 2px 2px 4px #000;
+        }
+        h1 { margin: 0; font-size: 28px; color: #FFD700; font-style: italic; }
+        p { margin: 5px 0; font-weight: bold; font-size: 20px; }
+        
+        #instruction {
+            position: absolute; bottom: 80px; width: 100%;
+            text-align: center; font-size: 24px; color: #FFD700;
+            pointer-events: none; text-shadow: 2px 2px 0px #000;
+            font-weight: bold; animation: pulse 0.8s infinite alternate;
+        }
+        #restart-btn {
+            display: none; position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%); padding: 15px 40px; font-size: 24px;
+            background: linear-gradient(to bottom, #FF8C00, #FF4500);
+            color: #FFF; border: 3px solid #FFF; border-radius: 50px;
+            cursor: pointer; box-shadow: 0 5px 15px rgba(0,0,0,0.5); z-index: 20;
+            font-weight: bold; font-family: inherit;
+        }
+        @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.05); } }
+    </style>
+</head>
+<body>
+
+<div id="loading-screen">載入圖片中...</div>
+
+<div id="game-container" style="display:none;">
+    <div id="ui-layer">
+        <h1>DRAGON BALL Z: BATTLE</h1>
+        <p>距離: <span id="score">0</span> M</p>
+        <p>紀錄: <span id="high-score">0</span> M</p>
+    </div>
+
+    <div id="instruction">按住滑鼠瞄準，釋放悟飯的力量！</div>
+    <button id="restart-btn" onclick="resetGame()">再戰一場</button>
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const loadingScreen = document.getElementById('loading-screen');
+    const gameContainer = document.getElementById('game-container');
+    const scoreEl = document.getElementById('score');
+    const highScoreEl = document.getElementById('high-score');
+    const restartBtn = document.getElementById('restart-btn');
+    const instructionEl = document.getElementById('instruction');
+
+    let width, height;
+    const groundHeight = 80;
+    let cameraX = 0;
+    
+    // 物理參數
+    const gravity = 0.5;
+    const frictionAir = 0.995;
+    const frictionGround = 0.9;
+    const bounceFactor = 0.6;
+    const meterScale = 15; 
+    const LAUNCH_SPEED = 70;
+    const MAX_ANGLE_UP = -85 * (Math.PI / 180);
+    const MAX_ANGLE_DOWN = 10 * (Math.PI / 180);
+
+    let timeScale = 1.0; 
+    const SLOW_MO_RATE = 0.1; 
+    let gameState = 'LOADING'; 
+    let highScore = localStorage.getItem('dbzSpriteHS') || 0;
+    highScoreEl.innerText = highScore;
+
+    // 角色物件
+    const player = { r: 30, x: 0, y: 0, vx: 0, vy: 0, rotation: 0, stopped: false, startX: 0 };
+    const startBatter = { x: 0, y: 0, animProgress: 0, swingSpeed: 0.12, type: 'GOHAN', cooldown: 0 };
+    let aimAngle = 0; 
+    let items = []; 
+    let nextSpawnX = 0; 
+    let particles = []; 
+    let shockwaves = []; 
+
+    // --- 精靈圖設定 (Sprite Sheet Config) ---
+    // 根據您提供的圖片 dbz_sprites.jpg 進行切分
+    // 假設圖片總寬高約為 900x900 (3x3 格局)
+    // 每個角色約佔 1/3 寬度
+    
+    const spriteSheet = new Image();
+    spriteSheet.src = 'dbz_sprites.png'; // 請確保檔名一致
+    
+    // 定義每個動作在圖中的座標 (x, y, w, h)
+    // 單位是比例 (0~1)，稍後乘上圖片實際大小
+    const sprites = {
+        // 第一排
+        'gohan_idle':   { x: 0,    y: 0,    w: 0.33, h: 0.33 }, 
+        'gohan_attack': { x: 0.33, y: 0,    w: 0.33, h: 0.33 },
+        'frieza':       { x: 0.66, y: 0,    w: 0.33, h: 0.33 },
+        // 第二排
+        'goku_idle':    { x: 0,    y: 0.33, w: 0.33, h: 0.33 },
+        'goku_attack':  { x: 0.33, y: 0.33, w: 0.33, h: 0.33 },
+        'vegeta_idle':  { x: 0.66, y: 0.33, w: 0.33, h: 0.33 },
+        // 第三排
+        'vegeta_attack':{ x: 0,    y: 0.66, w: 0.33, h: 0.33 }
+    };
+
+    spriteSheet.onload = () => {
+        loadingScreen.style.display = 'none';
+        gameContainer.style.display = 'block';
+        gameState = 'IDLE';
+        resize();
+        resetGame();
+        update();
+    };
+    
+    spriteSheet.onerror = () => {
+        alert("無法載入 dbz_sprites.jpg，請確保圖片已下載並放在同一資料夾中。");
+    };
+
+    function resize() {
+        width = window.innerWidth; height = window.innerHeight;
+        canvas.width = width; canvas.height = height;
+        if (gameState === 'IDLE') resetPlayerPosition();
+    }
+    window.addEventListener('resize', resize);
+    
+    function resetPlayerPosition() {
+        player.x = 300; 
+        player.y = height - groundHeight - 80;
+        player.startX = player.x;
+        player.rotation = 0;
+        player.vx = 0; player.vy = 0;
+        
+        startBatter.x = player.x - 100;
+        startBatter.y = height - groundHeight + 20;
+        startBatter.animProgress = 0;
+        cameraX = player.x - width * 0.25;
+    }
+
+    function spawnRandomItem(x) {
+        let rand = Math.random();
+        let type = rand > 0.45 ? 'GOKU' : 'VEGETA'; 
+        let itemY = height - groundHeight + 20; 
+        if (Math.random() > 0.6) itemY -= Math.random() * 200 + 50; 
+        items.push({ x: x, y: itemY, type: type, animProgress: 0, cooldown: 0 });
+    }
+
+    function updateWorldGeneration() {
+        if (cameraX + width > nextSpawnX) {
+            spawnRandomItem(nextSpawnX);
+            nextSpawnX += 900 + Math.random() * 1000; 
+        }
+        items = items.filter(item => item.x + 300 > cameraX - width); 
+    }
+
+    function resetGame() {
+        resetPlayerPosition();
+        player.stopped = false;
+        items = []; particles = []; shockwaves = [];
+        nextSpawnX = player.x + width; 
+        timeScale = 1.0;
+        gameState = 'IDLE';
+        restartBtn.style.display = 'none';
+        instructionEl.style.display = 'block';
+        instructionEl.innerText = "按住滑鼠瞄準，釋放悟飯的力量！";
+        scoreEl.innerText = "0";
+    }
+
+    function update() {
+        if (gameState === 'LOADING') return;
+        let cts = (gameState === 'FLYING') ? timeScale : 1.0;
+
+        // 發射階段
+        if (gameState === 'WINDUP') {
+            startBatter.animProgress += startBatter.swingSpeed;
+            if (startBatter.animProgress >= 0.6 && startBatter.animProgress < 0.6 + startBatter.swingSpeed) {
+                player.vx = Math.cos(aimAngle) * LAUNCH_SPEED;
+                player.vy = Math.sin(aimAngle) * LAUNCH_SPEED;
+                player.rotation = 0;
+                gameState = 'FLYING';
+                createShockwave(player.x, player.y, "rgba(255, 215, 0, 1)", 40); 
+                createExplosion(player.x, player.y, "#FFFF00", 1, 50);
+                cameraX += 40; 
+            }
+            if (startBatter.animProgress >= 1) startBatter.animProgress = 1;
+        }
+
+        // 飛行階段
+        if (gameState === 'FLYING') {
+            player.vy += gravity * cts;
+            player.x += player.vx * cts; player.y += player.vy * cts;
+            // 弗利札旋轉
+            player.rotation += player.vx * 0.05 * cts;
+
+            if (player.y + player.r > height - groundHeight) {
+                player.y = height - groundHeight - player.r;
+                player.vy *= -bounceFactor;
+                player.vx *= frictionGround;
+                if (Math.abs(player.vy) < gravity * 3) player.vy = 0;
+            } else {
+                player.vx *= frictionAir; player.vy *= frictionAir;
+            }
+
+            updateWorldGeneration();
+            checkCollisionsAndSlowMo(); 
+            updateParticles(cts);
+            updateShockwaves(cts);
+
+            if (Math.abs(player.vx) < 0.1 && Math.abs(player.vy) < 0.1 && player.y >= height - groundHeight - player.r - 2) {
+                player.stopped = true;
+                endGame();
+            }
+            scoreEl.innerText = Math.max(0, Math.floor((player.x - player.startX) / meterScale));
+        }
+
+        items.forEach(item => {
+            if (item.cooldown > 0) item.cooldown--;
+            if (item.cooldown === 0 && item.animProgress > 0) item.animProgress *= 0.85; 
+        });
+
+        let targetCam = player.x - width * 0.3;
+        if (targetCam < 0) targetCam = 0;
+        cameraX += (targetCam - cameraX) * (timeScale < 1.0 ? 0.5 : 0.15);
+
+        draw();
+        requestAnimationFrame(update);
+    }
+
+    function checkCollisionsAndSlowMo() {
+        let shouldSlowMo = false;
+        for (let item of items) {
+            if (item.cooldown > 0) continue;
+            let batterCenterY = item.y - 80;
+            let dx = player.x - item.x; 
+            let dy = player.y - batterCenterY; 
+            
+            if (dx > -350 && dx < 100 && Math.abs(dy) < 160 && Math.abs(player.vx) > 5) {
+                shouldSlowMo = true;
+                let distRatio = Math.abs(dx) / 350; 
+                item.animProgress = Math.max(item.animProgress, (1 - distRatio) * 0.7);
+
+                if (Math.abs(dx) < 90) { // 碰撞
+                    item.cooldown = 70; shouldSlowMo = false; item.animProgress = 1.0; 
+
+                    if (item.type === 'GOKU') {
+                        // 悟空 (加速右上)
+                        player.vx = Math.max(player.vx * 1.2, 90); 
+                        player.vy = -30; 
+                        createExplosion(player.x, player.y, "#FFA500", 1, 40); 
+                        createShockwave(player.x, player.y, "rgba(255, 165, 0, 1)", 40); 
+                    } else if (item.type === 'VEGETA') {
+                        // 貝吉塔 (阻擋左下扣殺)
+                        player.vx = -40; 
+                        player.vy = 35;  
+                        createExplosion(player.x, player.y, "#00BFFF", -1, 40); 
+                        createShockwave(player.x, player.y, "rgba(0, 191, 255, 1)", 40); 
+                    }
+                }
+            }
+        }
+        timeScale = shouldSlowMo ? SLOW_MO_RATE : 1.0;
+    }
+
+    // --- 繪圖核心 ---
+
+    function drawSprite(key, x, y, scaleX, isPlayer = false, rotation = 0) {
+        if (!spriteSheet.complete) return;
+        
+        let s = sprites[key];
+        if (!s) return;
+
+        // 計算圖片在 Sprite Sheet 中的實際像素位置
+        let sx = s.x * spriteSheet.width;
+        let sy = s.y * spriteSheet.height;
+        let sw = s.w * spriteSheet.width;
+        let sh = s.h * spriteSheet.height;
+
+        ctx.save();
+        ctx.translate(x, y);
+        if (isPlayer) ctx.rotate(rotation);
+        ctx.scale(scaleX, 1);
+        
+        // 繪製圖片 (調整尺寸以適應遊戲)
+        let drawW = 150; // 統一寬度
+        let drawH = 150; // 統一高度
+        
+        // 將圖片中心點對齊 (x,y)
+        ctx.drawImage(spriteSheet, sx, sy, sw, sh, -drawW/2, -drawH, drawW, drawH);
+        
+        ctx.restore();
+    }
+
+    // --- 特效系統 ---
+    function createExplosion(x, y, color, dir, count) {
+        for(let i=0; i<count; i++) {
+            let speed = (Math.random() * 15 + 8);
+            let angle = (dir === 1) ? (Math.random()-0.5)*1.2 : ((dir===-1) ? Math.PI+(Math.random()-0.5)*1.2 : Math.random()*Math.PI*2);
+            particles.push({
+                x: x, y: y, vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed,
+                life: 1.0, color: color, width: Math.random()*8+4, rotation: Math.random()*Math.PI
+            });
+        }
+    }
+    function createShockwave(x, y, color, speed) {
+        shockwaves.push({ x: x, y: y, r: 20, maxR: 350, alpha: 1.0, color: color, width: 25, speed: speed || 20 });
+    }
+    function updateParticles(ts) {
+        for(let i=particles.length-1; i>=0; i--) {
+            let p = particles[i]; let pTs = (ts < 1.0) ? 0.3 : 1.0; 
+            p.x += p.vx * pTs; p.y += p.vy * pTs; p.life -= 0.04 * pTs; p.rotation += 0.2 * pTs;
+            if(p.life <= 0) particles.splice(i, 1);
+        }
+    }
+    function updateShockwaves(ts) {
+        for(let i=shockwaves.length-1; i>=0; i--) {
+            let sw = shockwaves[i]; let speed = sw.speed * ((ts < 1.0) ? 0.4 : 1.0);
+            sw.r += speed; sw.width *= 0.92; sw.alpha -= 0.05 * ((ts < 1.0) ? 0.4 : 1.0);
+            if(sw.alpha <= 0) shockwaves.splice(i, 1);
+        }
+    }
+
+    // --- 主繪圖迴圈 ---
+    function draw() {
+        ctx.clearRect(0, 0, width, height);
+        ctx.save(); ctx.translate(-cameraX, 0);
+
+        if (timeScale < 0.9) { ctx.fillStyle = "rgba(0, 0, 0, 0.3)"; ctx.fillRect(cameraX, 0, width, height); }
+
+        // 那美克星背景
+        ctx.fillStyle = "#87CEEB"; ctx.fillRect(cameraX, 0, width, height); // 天空
+        ctx.fillStyle = "#8B4513"; ctx.fillRect(cameraX, height - groundHeight, width, groundHeight); // 土
+        ctx.fillStyle = "#006400"; ctx.fillRect(cameraX, height - groundHeight, width, 20); // 草
+
+        // 簡單背景樹木
+        for(let i=Math.floor(cameraX/300)*300; i<cameraX+width; i+=300) {
+            ctx.fillStyle = "#228B22"; 
+            ctx.beginPath(); ctx.arc(i, height-groundHeight-80, 40, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = "#8B4513"; ctx.fillRect(i-10, height-groundHeight-80, 20, 80);
+        }
+
+        // 距離
+        ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.font = "bold 16px Arial";
+        let startM = Math.floor(cameraX / (meterScale * 10)) * (meterScale * 10);
+        for (let m = startM; m < cameraX + width + 200; m += meterScale * 10) {
+            if (m > player.startX) {
+                let dist = Math.floor((m - player.startX) / meterScale);
+                ctx.fillRect(m, height - groundHeight, 4, 12);
+                ctx.fillText(`${dist}m`, m - 15, height - groundHeight + 35);
+            }
+        }
+
+        // 繪製角色 (使用圖片)
+        let gohanState = startBatter.animProgress >= 0.4 ? 'gohan_attack' : 'gohan_idle';
+        drawSprite(gohanState, startBatter.x, startBatter.y, 1);
+
+        items.forEach(item => {
+            let dir = (item.type === 'GOKU') ? 1 : -1;
+            let key = item.type.toLowerCase() + (item.animProgress >= 0.4 ? '_attack' : '_idle');
+            drawSprite(key, item.x, item.y, dir);
+        });
+
+        // 繪製弗利札 (使用圖片)
+        // 注意：弗利札的圖片中心要調整到球體中心
+        let fImg = sprites['frieza'];
+        if(fImg) {
+            ctx.save(); 
+            ctx.translate(player.x, player.y);
+            ctx.rotate(player.rotation);
+            // 繪製時偏移 -width/2, -height/2 讓旋轉中心在圖片中間
+            let drawW = 120; let drawH = 120;
+            
+            // 計算在 sprite sheet 中的位置
+            let sx = fImg.x * spriteSheet.width;
+            let sy = fImg.y * spriteSheet.height;
+            let sw = fImg.w * spriteSheet.width;
+            let sh = fImg.h * spriteSheet.height;
+            
+            ctx.drawImage(spriteSheet, sx, sy, sw, sh, -drawW/2, -drawH/2, drawW, drawH);
+            ctx.restore();
+        }
+
+        // 特效
+        ctx.globalCompositeOperation = 'lighter';
+        shockwaves.forEach(sw => {
+            ctx.beginPath(); ctx.arc(sw.x, sw.y, sw.r, 0, Math.PI * 2);
+            ctx.strokeStyle = sw.color; ctx.lineWidth = sw.width; ctx.globalAlpha = sw.alpha; ctx.stroke();
+        });
+        particles.forEach(p => {
+            ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rotation); 
+            ctx.fillStyle = p.color; ctx.globalAlpha = p.life; 
+            ctx.beginPath(); ctx.moveTo(-p.width, 0); ctx.lineTo(0, -p.width*1.5); ctx.lineTo(p.width, 0); ctx.lineTo(0, p.width*0.5); ctx.fill(); 
+            ctx.restore();
+        });
+        ctx.globalAlpha = 1.0; ctx.globalCompositeOperation = 'source-over';
+
+        // 瞄準線
+        if (gameState === 'IDLE') {
+            const sx = player.x; const sy = player.y; const len = 150;
+            const ex = sx + Math.cos(aimAngle) * len; const ey = sy + Math.sin(aimAngle) * len;
+            ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey);
+            ctx.strokeStyle = "#FF4500"; ctx.lineWidth = 5; ctx.setLineDash([20, 10]); ctx.stroke(); ctx.setLineDash([]);
+        }
+        ctx.restore();
+    }
+
+    function endGame() {
+        gameState = 'ENDED';
+        let finalScore = Math.floor((player.x - player.startX) / meterScale);
+        if (finalScore < 0) finalScore = 0;
+        if (finalScore > highScore) {
+            highScore = finalScore; localStorage.setItem('dbzSpriteHS', highScore); highScoreEl.innerText = highScore;
+            instructionEl.innerText = `新紀錄！弗利札飛了 ${finalScore} 公尺`;
+        } else {
+            instructionEl.innerText = `停下來了，距離: ${finalScore} 公尺`;
+        }
+        instructionEl.style.display = 'block'; restartBtn.style.display = 'block';
+    }
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (gameState !== 'IDLE') return;
+        let dx = e.clientX - player.x; let dy = e.clientY - player.y;
+        aimAngle = Math.atan2(dy, dx);
+        if (dx < 0) aimAngle = MAX_ANGLE_UP;
+        else { if (aimAngle < MAX_ANGLE_UP) aimAngle = MAX_ANGLE_UP; if (aimAngle > MAX_ANGLE_DOWN) aimAngle = MAX_ANGLE_DOWN; }
+    });
+    canvas.addEventListener('mousedown', (e) => {
+        if (gameState !== 'IDLE') return;
+        gameState = 'WINDUP'; startBatter.animProgress = 0; instructionEl.style.display = 'none';
+    });
+
+    resize();
+    // 遊戲會在 spriteSheet.onload 中啟動
+
+</script>
+</body>
+</html>
