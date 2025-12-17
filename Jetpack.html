@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Jetpack Mobile</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #222;
+            overflow: hidden; /* 禁止捲動 */
+            touch-action: none; /* 禁止瀏覽器預設手勢 */
+            font-family: 'Arial', sans-serif;
+        }
+
+        #gameCanvas {
+            display: block;
+            background-color: #34495e;
+            /* Canvas 會透過 JS 自動填滿視窗 */
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 10px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .score {
+            font-size: 24px;
+            color: #ecf0f1;
+            font-weight: bold;
+            background: rgba(0,0,0,0.3);
+            padding: 5px 15px;
+            border-radius: 20px;
+            display: inline-block;
+        }
+
+        #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+
+        h1 { color: #e74c3c; font-size: 40px; margin-bottom: 10px; }
+        p { color: white; font-size: 24px; margin: 10px 0; }
+
+        /* 大按鈕適合手指點擊 */
+        button {
+            background-color: #3498db;
+            border: none;
+            color: white;
+            padding: 15px 50px;
+            font-size: 24px;
+            border-radius: 50px;
+            cursor: pointer;
+            margin-top: 20px;
+            box-shadow: 0 4px 0 #2980b9;
+        }
+        
+        button:active {
+            transform: translateY(4px);
+            box-shadow: none;
+        }
+
+        /* 提示文字 */
+        #start-hint {
+            position: absolute;
+            bottom: 20%;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.5);
+            font-size: 18px;
+            pointer-events: none;
+            animation: flash 2s infinite;
+        }
+
+        @keyframes flash {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.8; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="score"><span id="scoreVal">0</span> m</div>
+    </div>
+
+    <div id="start-hint">按住螢幕飛行 / 放開下降</div>
+
+    <div id="gameOverScreen">
+        <h1>撞擊!</h1>
+        <p>成績: <span id="finalScore">0</span> m</p>
+        <button onclick="resetGame()">重玩</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('scoreVal');
+        const finalScoreEl = document.getElementById('finalScore');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const hintEl = document.getElementById('start-hint');
+
+        // 自動調整 Canvas 大小填滿手機螢幕
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // 遊戲變數
+        let gameRunning = true;
+        let score = 0;
+        let frameCount = 0;
+        
+        // 手機版速度調整：5 (比較舒適)
+        let gameSpeed = 5; 
+
+        let isTouching = false;
+
+        // 主角
+        const player = {
+            x: 50, // 手機版稍微靠左一點，視野較好
+            y: 0,
+            width: 30,
+            height: 30,
+            color: '#f1c40f', // 黃色比較顯眼
+            dy: 0,
+            gravity: 0.6,    // 重力適中
+            lift: -1.0,      // 上升力道柔和一點
+            maxFallSpeed: 9,
+            maxLiftSpeed: -9
+        };
+
+        // 初始化主角位置在中間
+        player.y = window.innerHeight / 2;
+
+        let obstacles = [];
+
+        // 觸控與滑鼠監聽 (統一處理)
+        function handleInputStart(e) {
+            // 防止點擊按鈕時觸發飛行
+            if(e.target.tagName === 'BUTTON') return;
+            
+            e.preventDefault(); // 防止滾動
+            isTouching = true;
+            hintEl.style.display = 'none'; // 開始玩就隱藏提示
+        }
+
+        function handleInputEnd(e) {
+            e.preventDefault();
+            isTouching = false;
+        }
+
+        document.addEventListener('mousedown', handleInputStart);
+        document.addEventListener('mouseup', handleInputEnd);
+        document.addEventListener('touchstart', handleInputStart, {passive: false});
+        document.addEventListener('touchend', handleInputEnd, {passive: false});
+
+        function spawnObstacle() {
+            const obsWidth = 50;
+            // 縫隙高度：稍微寬一點，約 3~4 倍主角高度，適合手機
+            const gapHeight = 110; 
+            
+            const minPadding = 50;
+            // 確保縫隙不會跑出畫面
+            const maxGapY = canvas.height - minPadding - gapHeight;
+            // 隨機縫隙位置
+            const gapY = Math.random() * (maxGapY - minPadding) + minPadding;
+
+            // 上方障礙
+            obstacles.push({
+                x: canvas.width,
+                y: 0,
+                width: obsWidth,
+                height: gapY,
+                color: '#ecf0f1' // 淺色障礙，對比深色背景
+            });
+
+            // 下方障礙
+            obstacles.push({
+                x: canvas.width,
+                y: gapY + gapHeight,
+                width: obsWidth,
+                height: canvas.height - (gapY + gapHeight),
+                color: '#ecf0f1'
+            });
+        }
+
+        function update() {
+            if (!gameRunning) return;
+
+            // 物理
+            if (isTouching) {
+                player.dy += player.lift;
+            } else {
+                player.dy += player.gravity;
+            }
+
+            // 摩擦力/空氣阻力 (讓手感更滑順)
+            player.dy *= 0.98;
+
+            if (player.dy > player.maxFallSpeed) player.dy = player.maxFallSpeed;
+            if (player.dy < player.maxLiftSpeed) player.dy = player.maxLiftSpeed;
+
+            player.y += player.dy;
+
+            // 邊界判定
+            if (player.y + player.height > canvas.height || player.y < 0) {
+                gameOver();
+            }
+
+            // 生成障礙 (根據螢幕寬度動態調整頻率)
+            // 手機寬度窄，頻率要低一點；平板寬度寬，頻率高一點
+            let spawnRate = Math.floor(250 / gameSpeed); 
+            if (frameCount % spawnRate === 0) {
+                spawnObstacle();
+            }
+
+            for (let i = 0; i < obstacles.length; i++) {
+                let obs = obstacles[i];
+                obs.x -= gameSpeed;
+
+                if (obs.x + obs.width < 0) {
+                    obstacles.splice(i, 1);
+                    i--;
+                    continue;
+                }
+
+                // 碰撞檢測 (寬容度 5px)
+                const hitPadding = 5; 
+                if (
+                    player.x + hitPadding < obs.x + obs.width &&
+                    player.x + player.width - hitPadding > obs.x &&
+                    player.y + hitPadding < obs.y + obs.height &&
+                    player.y + player.height - hitPadding > obs.y
+                ) {
+                    gameOver();
+                }
+            }
+
+            score++;
+            frameCount++;
+            scoreEl.innerText = Math.floor(score / 10);
+            
+            // 緩慢加速
+            if (frameCount % 1000 === 0) {
+                gameSpeed += 0.5;
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        function draw() {
+            if (!gameRunning) return;
+
+            // 背景
+            ctx.fillStyle = '#34495e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // 裝飾線 (地板天花板)
+            ctx.fillStyle = '#2c3e50';
+            ctx.fillRect(0, 0, canvas.width, 20);
+            ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
+
+            // 主角
+            ctx.fillStyle = player.color;
+            // 畫成圓角矩形看起來比較現代
+            ctx.beginPath();
+            ctx.roundRect(player.x, player.y, player.width, player.height, 5);
+            ctx.fill();
+
+            // 噴射效果
+            if (isTouching) {
+                ctx.fillStyle = '#e67e22';
+                ctx.beginPath();
+                ctx.arc(player.x + 15, player.y + 35, Math.random() * 10, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // 障礙物
+            ctx.fillStyle = '#ecf0f1';
+            for (let obs of obstacles) {
+                ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+                
+                // 陰影細節
+                ctx.fillStyle = 'rgba(0,0,0,0.2)';
+                ctx.fillRect(obs.x, obs.y, 10, obs.height); // 左側陰影
+                ctx.fillStyle = '#ecf0f1'; // 恢復顏色
+            }
+            
+            requestAnimationFrame(update);
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            finalScoreEl.innerText = Math.floor(score / 10);
+            gameOverScreen.style.display = 'flex'; // 用 flex 置中
+        }
+
+        function resetGame() {
+            player.y = canvas.height / 2;
+            player.dy = 0;
+            obstacles = [];
+            score = 0;
+            frameCount = 0;
+            gameSpeed = 5;
+            gameRunning = true;
+            isTouching = false;
+            gameOverScreen.style.display = 'none';
+            hintEl.style.display = 'block';
+            update();
+        }
+
+        update();
+        draw();
+
+    </script>
+</body>
+</html>
