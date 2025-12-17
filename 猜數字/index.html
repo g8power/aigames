@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>1A2B 人機對戰</title>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --accent: #3498db;
+            --player-bg: #e8f6f3;
+            --ai-bg: #fef9e7;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { color: var(--primary); margin-bottom: 10px; }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            max-width: 900px;
+            width: 100%;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        @media (max-width: 600px) {
+            .container { grid-template-columns: 1fr; }
+        }
+        
+        /* Setup Section */
+        #setup-screen {
+            text-align: center;
+            max-width: 500px;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        /* Game Sections */
+        .panel {
+            padding: 15px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            height: 500px;
+        }
+        .player-panel { background-color: var(--player-bg); border: 2px solid #a2d9ce; }
+        .ai-panel { background-color: var(--ai-bg); border: 2px solid #f9e79f; }
+        
+        h2 { text-align: center; margin-top: 0; }
+        .status-box {
+            text-align: center;
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #555;
+        }
+
+        /* Input Area */
+        .input-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 15px;
+        }
+        input[type="text"] {
+            padding: 10px;
+            font-size: 1.2rem;
+            width: 120px;
+            text-align: center;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 1rem;
+            background-color: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        button:hover { background-color: #2980b9; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+
+        /* History Logs */
+        .log-container {
+            flex-grow: 1;
+            overflow-y: auto;
+            background: rgba(255,255,255,0.7);
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+        }
+        .log-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .log-item:last-child { border-bottom: none; }
+        .badge {
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: white;
+            min-width: 40px;
+            text-align: center;
+        }
+        .badge-a { background-color: #27ae60; }
+        .badge-b { background-color: #e67e22; }
+        .badge-0 { background-color: #7f8c8d; }
+
+        .hidden { display: none !important; }
+        .winner { color: #e74c3c; font-weight: bold; font-size: 1.5rem; text-align: center; margin: 10px 0; }
+    </style>
+</head>
+<body>
+
+    <h1>1A2B 終極對戰</h1>
+
+    <div id="setup-screen">
+        <h2>準備階段</h2>
+        <p>請輸入你的「4位不重複數字」謎底供 AI 猜測：</p>
+        <div class="input-group">
+            <input type="text" id="player-secret" maxlength="4" placeholder="例如: 1234">
+            <button onclick="startGame()">開始對戰</button>
+        </div>
+        <p style="font-size: 0.9rem; color: #666;">規則：0-9 不重複數字，先猜出對方謎底者獲勝。</p>
+    </div>
+
+    <div id="game-screen" class="container hidden">
+        
+        <div class="panel player-panel">
+            <h2>你的進攻</h2>
+            <div class="status-box">目標：猜出 AI 的數字</div>
+            <div class="input-group">
+                <input type="text" id="player-guess" maxlength="4" placeholder="輸入猜測">
+                <button id="btn-guess" onclick="playerTurn()">猜測</button>
+            </div>
+            <div class="log-container" id="player-log">
+                </div>
+        </div>
+
+        <div class="panel ai-panel">
+            <h2>AI 的反擊</h2>
+            <div class="status-box">AI 正在破解你的謎底: <span id="display-player-secret" style="color:var(--accent)"></span></div>
+            <div class="status-box" id="ai-status-text">等待玩家行動...</div>
+            <div class="log-container" id="ai-log">
+                </div>
+        </div>
+
+    </div>
+
+    <div id="result-message" class="winner"></div>
+    <button id="restart-btn" class="hidden" onclick="location.reload()">再來一局</button>
+
+<script>
+    // --- 遊戲變數 ---
+    let aiSecret = "";      // AI 的謎底
+    let playerSecret = "";  // 玩家的謎底
+    let possibleAnswers = []; // AI 的智庫 (所有可能的答案)
+    let round = 0;
+    let isGameOver = false;
+
+    // --- 初始化與工具函數 ---
+
+    // 產生所有 0-9 不重複的 4 位數列表 (共 5040 組)
+    function initPossibleAnswers() {
+        let list = [];
+        for (let i = 0; i < 10000; i++) {
+            let s = String(i).padStart(4, '0');
+            if (isUnique(s)) {
+                list.push(s);
+            }
+        }
+        return list;
+    }
+
+    // 檢查數字是否不重複
+    function isUnique(str) {
+        return new Set(str).size === 4;
+    }
+
+    // 產生隨機謎底
+    function generateSecret() {
+        let digits = [0,1,2,3,4,5,6,7,8,9];
+        digits.sort(() => Math.random() - 0.5);
+        return digits.slice(0, 4).join("");
+    }
+
+    // 計算 A 和 B
+    function checkAB(secret, guess) {
+        let a = 0;
+        let b = 0;
+        for (let i = 0; i < 4; i++) {
+            if (guess[i] === secret[i]) {
+                a++;
+            } else if (secret.includes(guess[i])) {
+                b++;
+            }
+        }
+        return { a, b };
+    }
+
+    // --- 遊戲流程控制 ---
+
+    function startGame() {
+        const input = document.getElementById('player-secret');
+        const secret = input.value;
+
+        // 驗證輸入
+        if (!/^\d{4}$/.test(secret) || !isUnique(secret)) {
+            alert("請輸入 4 個不重複的數字 (0-9)！");
+            return;
+        }
+
+        playerSecret = secret;
+        aiSecret = generateSecret();
+        possibleAnswers = initPossibleAnswers(); // 初始化 AI 的大腦
+
+        // 切換介面
+        document.getElementById('setup-screen').classList.add('hidden');
+        document.getElementById('game-screen').classList.remove('hidden');
+        document.getElementById('display-player-secret').innerText = playerSecret;
+        
+        console.log("Cheating (AI Secret): " + aiSecret); // 開發者偷看用
+    }
+
+    // 玩家回合
+    function playerTurn() {
+        if (isGameOver) return;
+
+        const input = document.getElementById('player-guess');
+        const guess = input.value;
+
+        if (!/^\d{4}$/.test(guess) || !isUnique(guess)) {
+            alert("輸入格式錯誤，請輸入 4 個不重複數字。");
+            return;
+        }
+
+        // 1. 處理玩家猜測
+        const result = checkAB(aiSecret, guess);
+        addLog('player-log', guess, result);
+        input.value = ""; // 清空輸入框
+        
+        // 檢查玩家是否獲勝
+        if (result.a === 4) {
+            endGame("恭喜！你戰勝了 AI！");
+            return;
+        }
+
+        // 2. 進入 AI 回合
+        document.getElementById('ai-status-text').innerText = "AI 思考中...";
+        document.getElementById('btn-guess').disabled = true; // 暫時鎖定按鈕
+
+        setTimeout(() => {
+            aiTurn();
+            document.getElementById('btn-guess').disabled = false;
+        }, 800); // 延遲一下讓玩家感覺 AI 在思考
+    }
+
+    // AI 回合 (核心邏輯)
+    function aiTurn() {
+        if (isGameOver) return;
+
+        // AI 從可能的清單中隨機挑一個猜
+        // 優化策略：通常可以挑選能在剩餘清單中消除最多可能性的數字 (Minimax)，
+        // 但為了效能，簡單的「從剩餘清單隨機選」在 1A2B 已足夠強大。
+        const guessIndex = Math.floor(Math.random() * possibleAnswers.length);
+        const aiGuess = possibleAnswers[guessIndex];
+
+        // 系統自動幫玩家判定 AI 的成績
+        const result = checkAB(playerSecret, aiGuess);
+        addLog('ai-log', aiGuess, result);
+
+        // 檢查 AI 是否獲勝
+        if (result.a === 4) {
+            endGame("遺憾！AI 猜出了你的數字，AI 獲勝！");
+            return;
+        }
+
+        // **AI 學習過程 (篩選法)**
+        // 根據結果，將不可能產生此結果的答案從清單中移除
+        // 例如：AI 猜 1234 得 0A0B，那麼清單中所有包含 1,2,3,4 的數字都刪除
+        possibleAnswers = possibleAnswers.filter(candidate => {
+            const tempResult = checkAB(candidate, aiGuess); // 假設 candidate 是謎底，拿剛才猜的數字去比對
+            return tempResult.a === result.a && tempResult.b === result.b;
+        });
+        
+        document.getElementById('ai-status-text').innerText = `AI 剩餘 ${possibleAnswers.length} 種可能性`;
+    }
+
+    // --- UI 輔助 ---
+
+    function addLog(elementId, guess, result) {
+        const container = document.getElementById(elementId);
+        const div = document.createElement('div');
+        div.className = 'log-item';
+        
+        let badgeClass = 'badge-0';
+        if (result.a === 4) badgeClass = 'badge-a';
+        else if (result.a > 0 || result.b > 0) badgeClass = 'badge-b';
+
+        div.innerHTML = `
+            <span>${guess}</span>
+            <span class="badge ${badgeClass}">${result.a}A${result.b}B</span>
+        `;
+        container.insertBefore(div, container.firstChild); // 新的在上面
+    }
+
+    function endGame(msg) {
+        isGameOver = true;
+        document.getElementById('result-message').innerText = msg;
+        document.getElementById('btn-guess').disabled = true;
+        document.getElementById('restart-btn').classList.remove('hidden');
+    }
+
+</script>
+
+</body>
+</html>
