@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Jetpack Mobile Fixed</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #222;
+            overflow: hidden;
+            touch-action: none; /* 關鍵：讓瀏覽器知道這裡由我們接管觸控 */
+            font-family: 'Arial', sans-serif;
+            -webkit-user-select: none; /* 禁止選取文字 */
+            user-select: none;
+        }
+
+        #gameCanvas {
+            display: block;
+            background-color: #34495e;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 15px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .score {
+            font-size: 24px;
+            color: #ecf0f1;
+            font-weight: bold;
+            background: rgba(0,0,0,0.4);
+            padding: 8px 20px;
+            border-radius: 20px;
+            display: inline-block;
+            backdrop-filter: blur(5px);
+        }
+
+        #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20; /* 確保在最上層 */
+        }
+
+        h1 { color: #e74c3c; font-size: 40px; margin-bottom: 10px; }
+        p { color: white; font-size: 24px; margin: 10px 0; }
+
+        button {
+            background-color: #3498db;
+            border: none;
+            color: white;
+            padding: 20px 60px; /* 按鈕加大 */
+            font-size: 24px;
+            border-radius: 50px;
+            cursor: pointer;
+            margin-top: 30px;
+            box-shadow: 0 5px 0 #2980b9;
+            font-weight: bold;
+            pointer-events: auto; /* 確保按鈕可以被點到 */
+            touch-action: manipulation; /* 優化點擊 */
+        }
+        
+        button:active {
+            transform: translateY(5px);
+            box-shadow: none;
+            background-color: #2980b9;
+        }
+
+        #start-hint {
+            position: absolute;
+            bottom: 20%;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.6);
+            font-size: 20px;
+            pointer-events: none;
+            animation: flash 2s infinite;
+        }
+
+        @keyframes flash {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.9; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="score"><span id="scoreVal">0</span> m</div>
+    </div>
+
+    <div id="start-hint">按住螢幕飛行 / 放開下降</div>
+
+    <div id="gameOverScreen">
+        <h1>GAME OVER</h1>
+        <p>成績: <span id="finalScore">0</span> m</p>
+        <button id="retryBtn">重玩</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('scoreVal');
+        const finalScoreEl = document.getElementById('finalScore');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const hintEl = document.getElementById('start-hint');
+        const retryBtn = document.getElementById('retryBtn');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        let gameRunning = true;
+        let score = 0;
+        let frameCount = 0;
+        let gameSpeed = 5; 
+        let isTouching = false;
+
+        const player = {
+            x: 50,
+            y: 0,
+            width: 30,
+            height: 30,
+            color: '#f1c40f',
+            dy: 0,
+            gravity: 0.6,
+            lift: -1.0,
+            maxFallSpeed: 9,
+            maxLiftSpeed: -9
+        };
+        player.y = window.innerHeight / 2;
+
+        let obstacles = [];
+
+        // --- 修正後的輸入控制邏輯 ---
+
+        function startGameControl() {
+            // 觸控開始
+            document.addEventListener('touchstart', (e) => {
+                // 如果點到的是按鈕，直接忽略，讓按鈕自己的事件去處理
+                if (e.target.tagName === 'BUTTON') return;
+                
+                // 否則阻止預設行為（防止捲動），並開始飛行
+                if(e.cancelable) e.preventDefault();
+                isTouching = true;
+                hintEl.style.display = 'none';
+            }, { passive: false });
+
+            // 觸控結束
+            document.addEventListener('touchend', (e) => {
+                // 如果是按鈕，絕對不要 preventDefault，否則 click 事件會被吃掉
+                if (e.target.tagName === 'BUTTON') return;
+
+                if(e.cancelable) e.preventDefault();
+                isTouching = false;
+            }, { passive: false });
+
+            // 滑鼠支援 (電腦版測試用)
+            document.addEventListener('mousedown', (e) => {
+                if (e.target.tagName === 'BUTTON') return;
+                isTouching = true;
+                hintEl.style.display = 'none';
+            });
+            document.addEventListener('mouseup', () => isTouching = false);
+        }
+
+        // 綁定按鈕事件 (使用 click 最穩當)
+        retryBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // 防止事件冒泡
+            resetGame();
+        });
+        // 為了讓手機反應更快，也可以加這個，但要小心重複觸發
+        retryBtn.addEventListener('touchstart', (e) => {
+            e.stopPropagation(); // 阻止它傳遞到 document 變成飛行指令
+        }, { passive: true });
+
+        startGameControl();
+
+
+        function spawnObstacle() {
+            const obsWidth = 50;
+            const gapHeight = 130; // 縫隙稍微再加大一點點，增加容錯率
+            const minPadding = 50;
+            const maxGapY = canvas.height - minPadding - gapHeight;
+            const gapY = Math.random() * (maxGapY - minPadding) + minPadding;
+
+            obstacles.push({
+                x: canvas.width,
+                y: 0,
+                width: obsWidth,
+                height: gapY,
+                color: '#ecf0f1'
+            });
+
+            obstacles.push({
+                x: canvas.width,
+                y: gapY + gapHeight,
+                width: obsWidth,
+                height: canvas.height - (gapY + gapHeight),
+                color: '#ecf0f1'
+            });
+        }
+
+        function update() {
+            if (!gameRunning) return;
+
+            if (isTouching) {
+                player.dy += player.lift;
+            } else {
+                player.dy += player.gravity;
+            }
+
+            player.dy *= 0.98;
+
+            if (player.dy > player.maxFallSpeed) player.dy = player.maxFallSpeed;
+            if (player.dy < player.maxLiftSpeed) player.dy = player.maxLiftSpeed;
+
+            player.y += player.dy;
+
+            if (player.y + player.height > canvas.height || player.y < 0) {
+                gameOver();
+            }
+
+            let spawnRate = Math.floor(250 / gameSpeed); 
+            if (frameCount % spawnRate === 0) {
+                spawnObstacle();
+            }
+
+            for (let i = 0; i < obstacles.length; i++) {
+                let obs = obstacles[i];
+                obs.x -= gameSpeed;
+
+                if (obs.x + obs.width < 0) {
+                    obstacles.splice(i, 1);
+                    i--;
+                    continue;
+                }
+
+                // 碰撞檢測 (寬容度)
+                const hitPadding = 6; 
+                if (
+                    player.x + hitPadding < obs.x + obs.width &&
+                    player.x + player.width - hitPadding > obs.x &&
+                    player.y + hitPadding < obs.y + obs.height &&
+                    player.y + player.height - hitPadding > obs.y
+                ) {
+                    gameOver();
+                }
+            }
+
+            score++;
+            frameCount++;
+            scoreEl.innerText = Math.floor(score / 10);
+            
+            if (frameCount % 1000 === 0) {
+                gameSpeed += 0.5;
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        function draw() {
+            if (!gameRunning) return;
+
+            ctx.fillStyle = '#34495e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // 裝飾
+            ctx.fillStyle = '#2c3e50';
+            ctx.fillRect(0, 0, canvas.width, 20);
+            ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
+
+            // 主角
+            ctx.fillStyle = player.color;
+            ctx.beginPath();
+            ctx.roundRect(player.x, player.y, player.width, player.height, 5);
+            ctx.fill();
+
+            if (isTouching) {
+                ctx.fillStyle = '#e67e22';
+                ctx.beginPath();
+                ctx.arc(player.x + 15, player.y + 35, Math.random() * 8 + 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // 障礙
+            ctx.fillStyle = '#ecf0f1';
+            for (let obs of obstacles) {
+                ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+                ctx.fillStyle = 'rgba(0,0,0,0.15)';
+                ctx.fillRect(obs.x, obs.y, 10, obs.height);
+                ctx.fillStyle = '#ecf0f1';
+            }
+            
+            requestAnimationFrame(update);
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            finalScoreEl.innerText = Math.floor(score / 10);
+            gameOverScreen.style.display = 'flex';
+        }
+
+        function resetGame() {
+            // 確保重置時狀態正確
+            player.y = canvas.height / 2;
+            player.dy = 0;
+            obstacles = [];
+            score = 0;
+            frameCount = 0;
+            gameSpeed = 5;
+            gameRunning = true;
+            isTouching = false; // 重置觸控狀態，避免一開始就往上飛
+            gameOverScreen.style.display = 'none';
+            hintEl.style.display = 'block';
+            update();
+            draw(); // 立即重繪第一幀
+        }
+
+        update();
+        draw();
+
+    </script>
+</body>
+</html>

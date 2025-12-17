@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>黑白棋 (Othello) - 10級 AI</title>
+    <style>
+        :root {
+            --board-color: #2e8b57; /* 海綠色 */
+            --board-border: #1e5b3a;
+            --bg-color: #222;
+            --text-color: #eee;
+            --cell-size: 50px; /* 電腦版尺寸 */
+        }
+
+        @media (max-width: 600px) {
+            :root { --cell-size: 11vw; } /* 手機版自適應 */
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            user-select: none;
+        }
+
+        h1 { margin: 10px 0; font-size: 1.8rem; letter-spacing: 2px; }
+
+        /* 控制面板 */
+        .controls {
+            background: #333;
+            padding: 15px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            margin-bottom: 15px;
+        }
+
+        .score-board {
+            display: flex;
+            justify-content: space-around;
+            font-size: 1.2rem;
+            font-weight: bold;
+            background: #444;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        
+        .score-item { display: flex; align-items: center; gap: 8px; }
+        .score-dot { width: 15px; height: 15px; border-radius: 50%; border: 1px solid #777; }
+        .dot-black { background: black; }
+        .dot-white { background: white; }
+        .active-turn { color: #4CAF50; text-shadow: 0 0 5px #4CAF50; }
+
+        .slider-container { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+        input[type=range] { flex-grow: 1; accent-color: #4CAF50; cursor: pointer; }
+
+        button {
+            background: #4CAF50; color: white; border: none; padding: 10px;
+            border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 1rem;
+        }
+        button:hover { background: #45a049; }
+
+        /* 棋盤 */
+        .board {
+            display: grid;
+            grid-template-columns: repeat(8, var(--cell-size));
+            grid-template-rows: repeat(8, var(--cell-size));
+            gap: 2px;
+            background-color: var(--board-border);
+            padding: 5px;
+            border-radius: 5px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        .cell {
+            width: var(--cell-size);
+            height: var(--cell-size);
+            background-color: var(--board-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            cursor: pointer;
+        }
+
+        /* 棋子 */
+        .disc {
+            width: 80%;
+            height: 80%;
+            border-radius: 50%;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.4);
+            transition: transform 0.3s ease-out;
+        }
+        .disc.black { background: black; background: radial-gradient(circle at 30% 30%, #444, #000); }
+        .disc.white { background: white; background: radial-gradient(circle at 30% 30%, #fff, #ccc); }
+
+        /* 視覺提示 */
+        .hint {
+            width: 30%; height: 30%;
+            background: rgba(0,0,0,0.2);
+            border-radius: 50%;
+        }
+        .last-move::after {
+            content: '';
+            position: absolute;
+            width: 10px; height: 10px;
+            background: #FFD700; /* 金色標記 */
+            border-radius: 50%;
+            box-shadow: 0 0 5px black;
+        }
+
+        /* 狀態訊息 */
+        #status-msg { margin-top: 10px; color: #aaa; font-style: italic; min-height: 1.5em; }
+
+        /* 遮罩 */
+        #overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+        #result-text { font-size: 2.5rem; margin-bottom: 20px; font-weight: bold; }
+
+    </style>
+</head>
+<body>
+
+    <h1>Reversi AI</h1>
+
+    <div class="controls">
+        <div class="score-board">
+            <div class="score-item" id="p1-score-box">
+                <div class="score-dot dot-black"></div>
+                <span>Player: <span id="score-black">2</span></span>
+            </div>
+            <div class="score-item" id="p2-score-box">
+                <div class="score-dot dot-white"></div>
+                <span>AI (Lv<span id="lvl-display">1</span>): <span id="score-white">2</span></span>
+            </div>
+        </div>
+
+        <div class="slider-container">
+            <span>弱</span>
+            <input type="range" id="diff-slider" min="1" max="10" value="1">
+            <span>強</span>
+        </div>
+
+        <button onclick="resetGame()">新遊戲 (Restart)</button>
+    </div>
+
+    <div class="board" id="board"></div>
+    <div id="status-msg">請執黑先行</div>
+
+    <div id="overlay">
+        <div id="result-text">YOU WIN</div>
+        <button onclick="resetGame()">再玩一次</button>
+    </div>
+
+<script>
+    // --- 常數與設定 ---
+    const BOARD_SIZE = 8;
+    const BLACK = 1;
+    const WHITE = 2;
+    const EMPTY = 0;
+    
+    // 方向向量 (上, 下, 左, 右, 左上, 右上, 左下, 右下)
+    const DIRECTIONS = [
+        [-1, 0], [1, 0], [0, -1], [0, 1],
+        [-1, -1], [-1, 1], [1, -1], [1, 1]
+    ];
+
+    // 權重矩陣 (用於 AI 評估盤面價值)
+    // 角落價值最高(100)，C位和X位(角落旁)是危險區(-20, -50)，邊框尚可(10)
+    const WEIGHTS = [
+        [100, -20, 10,  5,  5, 10, -20, 100],
+        [-20, -50, -2, -2, -2, -2, -50, -20],
+        [ 10,  -2, -1, -1, -1, -1,  -2,  10],
+        [  5,  -2, -1, -1, -1, -1,  -2,   5],
+        [  5,  -2, -1, -1, -1, -1,  -2,   5],
+        [ 10,  -2, -1, -1, -1, -1,  -2,  10],
+        [-20, -50, -2, -2, -2, -2, -50, -20],
+        [100, -20, 10,  5,  5, 10, -20, 100]
+    ];
+
+    // --- 遊戲狀態 ---
+    let board = [];
+    let currentPlayer = BLACK;
+    let isGameOver = false;
+    let aiLevel = 1;
+    let lastMove = null; // {r, c}
+
+    // DOM 元素
+    const boardEl = document.getElementById('board');
+    const scoreBlackEl = document.getElementById('score-black');
+    const scoreWhiteEl = document.getElementById('score-white');
+    const statusMsg = document.getElementById('status-msg');
+    const overlay = document.getElementById('overlay');
+    const resultText = document.getElementById('result-text');
+    const slider = document.getElementById('diff-slider');
+    const lvlDisplay = document.getElementById('lvl-display');
+    const p1Box = document.getElementById('p1-score-box');
+    const p2Box = document.getElementById('p2-score-box');
+
+    // --- 初始化 ---
+    slider.addEventListener('input', (e) => {
+        aiLevel = parseInt(e.target.value);
+        lvlDisplay.textContent = aiLevel;
+    });
+
+    function initBoard() {
+        boardEl.innerHTML = '';
+        board = Array(BOARD_SIZE).fill().map(() => Array(BOARD_SIZE).fill(EMPTY));
+        
+        // 初始四子
+        board[3][3] = WHITE;
+        board[3][4] = BLACK;
+        board[4][3] = BLACK;
+        board[4][4] = WHITE;
+
+        renderBoard();
+        updateScore();
+    }
+
+    function renderBoard() {
+        boardEl.innerHTML = '';
+        // 取得當前玩家的合法步數提示
+        const validMoves = getValidMoves(board, currentPlayer);
+        
+        for (let r = 0; r < BOARD_SIZE; r++) {
+            for (let c = 0; c < BOARD_SIZE; c++) {
+                const cell = document.createElement('div');
+                cell.className = 'cell';
+                cell.dataset.r = r;
+                cell.dataset.c = c;
+                cell.onclick = () => handleUserClick(r, c);
+
+                // 繪製棋子
+                if (board[r][c] !== EMPTY) {
+                    const disc = document.createElement('div');
+                    disc.className = `disc ${board[r][c] === BLACK ? 'black' : 'white'}`;
+                    cell.appendChild(disc);
+                }
+
+                // 標記最後一步
+                if (lastMove && lastMove.r === r && lastMove.c === c) {
+                    cell.classList.add('last-move');
+                }
+
+                // 顯示提示點 (僅對人類玩家 BLACK 顯示)
+                if (currentPlayer === BLACK && !isGameOver) {
+                    if (validMoves.some(m => m.r === r && m.c === c)) {
+                        const hint = document.createElement('div');
+                        hint.className = 'hint';
+                        cell.appendChild(hint);
+                    }
+                }
+
+                boardEl.appendChild(cell);
+            }
+        }
+    }
+
+    function updateScore() {
+        let blackScore = 0;
+        let whiteScore = 0;
+        for(let r=0; r<8; r++) {
+            for(let c=0; c<8; c++) {
+                if(board[r][c] === BLACK) blackScore++;
+                if(board[r][c] === WHITE) whiteScore++;
+            }
+        }
+        scoreBlackEl.textContent = blackScore;
+        scoreWhiteEl.textContent = whiteScore;
+
+        // UI 高亮顯示當前回合
+        if (currentPlayer === BLACK) {
+            p1Box.classList.add('active-turn');
+            p2Box.classList.remove('active-turn');
+        } else {
+            p1Box.classList.remove('active-turn');
+            p2Box.classList.add('active-turn');
+        }
+    }
+
+    // --- 遊戲邏輯核心 ---
+
+    function isValidMove(b, r, c, player) {
+        if (b[r][c] !== EMPTY) return false;
+        
+        const opponent = player === BLACK ? WHITE : BLACK;
+        
+        for (let [dr, dc] of DIRECTIONS) {
+            let nr = r + dr;
+            let nc = c + dc;
+            let foundOpponent = false;
+
+            while (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE) {
+                if (b[nr][nc] === opponent) {
+                    foundOpponent = true;
+                } else if (b[nr][nc] === player) {
+                    if (foundOpponent) return true; // 夾住了
+                    break;
+                } else {
+                    break; // 遇到空格
+                }
+                nr += dr;
+                nc += dc;
+            }
+        }
+        return false;
+    }
+
+    function getValidMoves(b, player) {
+        let moves = [];
+        for (let r = 0; r < BOARD_SIZE; r++) {
+            for (let c = 0; c < BOARD_SIZE; c++) {
+                if (isValidMove(b, r, c, player)) {
+                    moves.push({r, c});
+                }
+            }
+        }
+        return moves;
+    }
+
+    function executeMove(b, r, c, player) {
+        const newBoard = b.map(row => [...row]); // Deep copy
+        newBoard[r][c] = player;
+        const opponent = player === BLACK ? WHITE : BLACK;
+
+        for (let [dr, dc] of DIRECTIONS) {
+            let nr = r + dr;
+            let nc = c + dc;
+            let flips = [];
+
+            while (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE) {
+                if (newBoard[nr][nc] === opponent) {
+                    flips.push({r: nr, c: nc});
+                } else if (newBoard[nr][nc] === player) {
+                    if (flips.length > 0) {
+                        flips.forEach(p => newBoard[p.r][p.c] = player);
+                    }
+                    break;
+                } else {
+                    break;
+                }
+                nr += dr;
+                nc += dc;
+            }
+        }
+        return newBoard;
+    }
+
+    // --- 遊戲流程控制 ---
+
+    function handleUserClick(r, c) {
+        if (isGameOver || currentPlayer !== BLACK) return;
+        
+        if (isValidMove(board, r, c, BLACK)) {
+            makeMove(r, c);
+        }
+    }
+
+    function makeMove(r, c) {
+        board = executeMove(board, r, c, currentPlayer);
+        lastMove = {r, c};
+        renderBoard();
+        updateScore();
+        
+        // 切換回合
+        currentPlayer = currentPlayer === BLACK ? WHITE : BLACK;
+        
+        checkGameLoop();
+    }
+
+    function checkGameLoop() {
+        // 檢查當前玩家是否有步可走
+        const validMoves = getValidMoves(board, currentPlayer);
+        
+        if (validMoves.length === 0) {
+            // 檢查對手是否有步可走 (是否雙方都沒步了)
+            const opponent = currentPlayer === BLACK ? WHITE : BLACK;
+            const oppMoves = getValidMoves(board, opponent);
+            
+            if (oppMoves.length === 0) {
+                endGame();
+                return;
+            } else {
+                // Pass
+                statusMsg.textContent = `${currentPlayer === BLACK ? "黑方" : "白方"} 無步可走 - PASS`;
+                currentPlayer = opponent;
+                setTimeout(checkGameLoop, 1500); // 延遲讓玩家看到 Pass 訊息
+                return;
+            }
+        }
+
+        statusMsg.textContent = currentPlayer === BLACK ? "輪到你 (黑)" : `電腦思考中 (Lv ${aiLevel})...`;
+
+        if (currentPlayer === WHITE) {
+            // AI 回合，延遲一下比較自然
+            setTimeout(() => aiMove(), 500);
+        } else {
+            // 重新渲染以顯示提示點
+            renderBoard(); 
+        }
+    }
+
+    function endGame() {
+        isGameOver = true;
+        let blackScore = parseInt(scoreBlackEl.textContent);
+        let whiteScore = parseInt(scoreWhiteEl.textContent);
+        
+        let msg = "";
+        let color = "";
+        if (blackScore > whiteScore) { msg = "YOU WIN!"; color = "#4CAF50"; }
+        else if (whiteScore > blackScore) { msg = "YOU LOSE"; color = "#FF5252"; }
+        else { msg = "DRAW"; color = "#FFD700"; }
+
+        resultText.textContent = msg;
+        resultText.style.color = color;
+        overlay.style.display = 'flex';
+    }
+
+    function resetGame() {
+        overlay.style.display = 'none';
+        isGameOver = false;
+        currentPlayer = BLACK;
+        lastMove = null;
+        statusMsg.textContent = "請執黑先行";
+        initBoard();
+    }
+
+    // --- AI 引擎 (10級難度) ---
+
+    function aiMove() {
+        const moves = getValidMoves(board, WHITE);
+        if (moves.length === 0) return; // 理論上 checkGameLoop 處理過了
+
+        let bestMove = null;
+
+        // Lv 1: 純隨機
+        if (aiLevel === 1) {
+            bestMove = moves[Math.floor(Math.random() * moves.length)];
+        } 
+        // Lv 2: 貪婪 (只看這一手能吃幾顆子)
+        else if (aiLevel === 2) {
+            let maxFlips = -1;
+            for (let m of moves) {
+                // 模擬移動看吃多少子
+                let tempBoard = executeMove(board, m.r, m.c, WHITE);
+                let count = countScore(tempBoard, WHITE);
+                if (count > maxFlips) {
+                    maxFlips = count;
+                    bestMove = m;
+                }
+            }
+        }
+        // Lv 3-10: Minimax 演算法
+        else {
+            // 根據難度設定搜尋深度
+            // Lv3: depth 1
+            // Lv4-5: depth 2
+            // Lv6-7: depth 3
+            // Lv8-9: depth 4
+            // Lv10: depth 5
+            let depth = 1;
+            if (aiLevel >= 4) depth = 2;
+            if (aiLevel >= 6) depth = 3;
+            if (aiLevel >= 8) depth = 4;
+            if (aiLevel >= 10) depth = 5;
+
+            bestMove = getBestMoveMinimax(board, depth);
+        }
+
+        makeMove(bestMove.r, bestMove.c);
+    }
+
+    function countScore(b, player) {
+        let s = 0;
+        for(let r=0; r<8; r++) for(let c=0; c<8; c++) if(b[r][c] === player) s++;
+        return s;
+    }
+
+    // Minimax 入口
+    function getBestMoveMinimax(currentBoard, depth) {
+        let moves = getValidMoves(currentBoard, WHITE);
+        let bestScore = -Infinity;
+        let bestMove = moves[0];
+        let alpha = -Infinity;
+        let beta = Infinity;
+
+        // 如果是較低等級，增加一點隨機性以免走法固定
+        if (aiLevel <= 5 && moves.length > 1) {
+            // 隨機打亂順序
+            moves.sort(() => Math.random() - 0.5);
+        }
+
+        for (let m of moves) {
+            let newBoard = executeMove(currentBoard, m.r, m.c, WHITE);
+            // 遞迴呼叫 (換黑方走，取極小值)
+            let score = minimax(newBoard, depth - 1, false, alpha, beta);
+            
+            if (score > bestScore) {
+                bestScore = score;
+                bestMove = m;
+            }
+            alpha = Math.max(alpha, score);
+        }
+        return bestMove;
+    }
+
+    // Minimax + Alpha-Beta Pruning
+    function minimax(b, depth, isMaximizing, alpha, beta) {
+        // 終止條件：深度到0 或 遊戲結束
+        if (depth === 0) {
+            return evaluateBoard(b);
+        }
+
+        // 檢查是否遊戲結束 (雙方無步)
+        let whiteMoves = getValidMoves(b, WHITE);
+        let blackMoves = getValidMoves(b, BLACK);
+        if (whiteMoves.length === 0 && blackMoves.length === 0) {
+            // 遊戲結束，給出極大/極小分
+            let w = countScore(b, WHITE);
+            let bl = countScore(b, BLACK);
+            return (w - bl) * 1000; 
+        }
+
+        if (isMaximizing) {
+            // AI (White) 回合，找最大分
+            if (whiteMoves.length === 0) {
+                // Pass，繼續往下層搜，但換對方
+                return minimax(b, depth - 1, false, alpha, beta);
+            }
+
+            let maxEval = -Infinity;
+            for (let m of whiteMoves) {
+                let newBoard = executeMove(b, m.r, m.c, WHITE);
+                let eval = minimax(newBoard, depth - 1, false, alpha, beta);
+                maxEval = Math.max(maxEval, eval);
+                alpha = Math.max(alpha, eval);
+                if (beta <= alpha) break; // Pruning
+            }
+            return maxEval;
+
+        } else {
+            // Player (Black) 回合，找最小分 (假設玩家也極聰明)
+            if (blackMoves.length === 0) {
+                return minimax(b, depth - 1, true, alpha, beta);
+            }
+
+            let minEval = Infinity;
+            for (let m of blackMoves) {
+                let newBoard = executeMove(b, m.r, m.c, BLACK);
+                let eval = minimax(newBoard, depth - 1, true, alpha, beta);
+                minEval = Math.min(minEval, eval);
+                beta = Math.min(beta, eval);
+                if (beta <= alpha) break; // Pruning
+            }
+            return minEval;
+        }
+    }
+
+    // 評估函數 (Position Weight + Mobility + Coin Parity)
+    function evaluateBoard(b) {
+        let whiteScore = 0;
+        let blackScore = 0;
+        
+        // 1. 位置權重 (Positional Strategy) - 最重要
+        for (let r = 0; r < BOARD_SIZE; r++) {
+            for (let c = 0; c < BOARD_SIZE; c++) {
+                if (b[r][c] === WHITE) whiteScore += WEIGHTS[r][c];
+                else if (b[r][c] === BLACK) blackScore += WEIGHTS[r][c];
+            }
+        }
+
+        // 2. 行動力 (Mobility) - 到了 Lv 7 以上才考慮
+        // 行動力是指「我有多少步可走」，通常越多越好，能逼死對方
+        if (aiLevel >= 7) {
+            let wMoves = getValidMoves(b, WHITE).length;
+            let bMoves = getValidMoves(b, BLACK).length;
+            whiteScore += wMoves * 5; // 給予行動力權重
+            blackScore += bMoves * 5;
+        }
+
+        return whiteScore - blackScore;
+    }
+
+    // 啟動遊戲
+    resetGame();
+
+</script>
+
+</body>
+</html>
