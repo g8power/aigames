@@ -530,36 +530,29 @@
     function handleBoardClick(e) {
         if(gameOver || turn === 'b' || selectedSquare === -1) return;
         
+        // 1. 取得棋盤目前的尺寸與位置 (包含縮放後的)
         let rect = boardEl.getBoundingClientRect();
         
-        // --- 修正重點開始 ---
-        // 我們不再用固定的 50px 來算，而是根據當前棋盤實際在螢幕上的寬高來算
-        // 這樣無論手機縮放成多小，座標比例都會是對的
+        // 2. 計算現在一格實際上是多少像素 (動態計算)
+        // 棋盤分為 9 行 10 列
         let cellWidth = rect.width / 9;
         let cellHeight = rect.height / 10;
 
+        // 3. 換算點擊座標 (相對於棋盤左上角)
         let x = Math.floor((e.clientX - rect.left) / cellWidth);
         let y = Math.floor((e.clientY - rect.top) / cellHeight);
-        // --- 修正重點結束 ---
         
-        // 邊界檢查 (防止點到邊框外一點點導致報錯)
+        // 4. 確保點擊在棋盤範圍內
         if(x >= 0 && x < 9 && y >= 0 && y < 10) {
             let target = y * 9 + x;
             
-            // 檢查是否為合法的移動位置
-            let isLegal = false;
-            for(let m of legalMoves) {
-                if(m.to === target) {
-                    isLegal = true;
-                    break;
-                }
-            }
-
-            if(isLegal) {
+            // --- 修正重點在這裡 ---
+            // 原本的 legalMoves 是一個數字陣列 (例如 [19, 20])
+            // 直接用 includes 檢查 target 是否在列表內即可
+            if(legalMoves.includes(target)) {
                 makeMove(selectedSquare, target);
             } else {
-                // 如果點的不是綠點，才取消選取
-                // 這裡加一個判斷：如果你點的是原本選中的棋子，就不做任何事(不取消)
+                // 如果點的不是合法移動點，且不是自己(避免誤觸取消)，才取消選取
                 if(target !== selectedSquare) {
                     selectedSquare = -1;
                     legalMoves = [];
