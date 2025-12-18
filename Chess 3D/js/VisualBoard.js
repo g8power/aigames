@@ -226,33 +226,67 @@ export class VisualBoard {
 
     async performMove(from, to, boardState, captured) {
         const piece = this.pieces[from];
-        const victim = this.pieces[to];
+        let victim = this.pieces[to]; // 使用 let，因為我們可能需要強制清除它
         const type = boardState[to];
 
-        // --- 修正重點：防止幽靈棋子 ---
-        // 如果目的地有東西，但邏輯說「沒吃子」，代表那是殘留的 Bug 模型，直接刪除
+        // --- 修正 1: 安全檢查，如果找不到棋子模型，直接重生成並退出 (避免崩潰) ---
+        if (!piece) {
+            console.warn("模型丟失，觸發自動修復...");
+            this.spawnPieces(boardState);
+            return;
+        }
+
+        // --- 修正 2: 自殺防護機制 (Suicide Prevention) ---
+        // 這是最關鍵的一步！
+        // 如果「移動者(piece)」和「受害者(victim)」的記憶體 ID 一樣，代表狀態錯亂了
+        // 我們強制把 victim 視為無效，避免自己殺死自己
+        if (victim && piece.uuid === victim.uuid) {
+            console.log("偵測到自我重疊，取消擊殺判定");
+            victim = null; // 強制忽略受害者
+            captured = false; // 強制取消吃子狀態
+        }
+
+        // --- 修正 3: 幽靈清除 ---
+        // 如果目的地有東西，但邏輯說「沒吃子(captured=false)」，
+        // 那個東西必定是顯示錯誤的殘影 (Ghost)，直接刪除，不要播動畫
         if (victim && !captured) {
             this.scene.remove(victim);
-            this.pieces[to] = null;
+            if (victim.geometry) victim.geometry.dispose(); // 釋放記憶體
+            victim = null;
         }
-        // ---------------------------
 
+        // 更新內部陣列狀態
         this.pieces[to] = piece;
         this.pieces[from] = null;
 
+        // --- 執行擊殺動畫 (只有在受害者存在 且 不是自己時) ---
         if(victim && captured) {
-            await this.animator.killPiece(victim);
+            // 不要在這裡 await，讓擊殺動畫和移動動畫同時開始，比較流暢
+            this.animator.killPiece(victim); 
         }
 
+        // 計算目標位置
         const targetPos = this.getCoord(to);
         
+        // --- 修正 4: 強制重置棋子狀態 (Reset State) ---
+        // 在移動前，確保棋子是「活著」的狀態 (防止它繼承了之前的死亡動畫屬性)
+        piece.visible = true;
+        piece.scale.set(1, 1, 1);
+        piece.rotation.set(0, 0, 0); 
+        // 如果是騎士，要保持原本的 Y 軸旋轉
+        if (type.toLowerCase() === 'n') {
+            piece.rotation.y = (type === 'N') ? Math.PI/2 : -Math.PI/2;
+        }
+
+        // 執行移動動畫
+        await this.animator.movePiece(piece, targetPos, type);
+        
+        // --- 修正 5: 動畫結束後的最終校正 ---
+        // 確保位置絕對精準，不會因為動畫誤差而慢慢飄移
         if (piece) {
-            await this.animator.movePiece(piece, targetPos, type);
-            // 動畫結束後再次強制校正
             piece.position.copy(targetPos);
-            piece.position.y = 0; // 確保貼地
-            piece.scale.set(1, 1, 1); // 確保大小正常
-            piece.rotation.set(0, piece.rotation.y, 0); // 確保沒有歪倒
+            piece.position.y = 0;
+            piece.scale.set(1, 1, 1);
         }
     }
 
