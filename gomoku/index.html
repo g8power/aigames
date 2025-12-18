@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>HTML AI 五子棋 (修正版)</title>
+    <style>
+        body {
+            font-family: "Microsoft JhengHei", sans-serif;
+            background-color: #f0e4d0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 10px;
+            user-select: none;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+        h1 { color: #5d4037; margin: 10px 0; font-size: 24px; }
+        .controls {
+            margin-bottom: 10px;
+            background: #fff;
+            padding: 8px 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            z-index: 50;
+        }
+        select, button { padding: 5px; font-size: 14px; cursor: pointer;}
+        #status { font-weight: bold; color: #d32f2f; min-width: 60px; text-align: center; }
+        
+        .board-wrapper {
+            position: relative;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.4);
+            margin-top: 5px;
+            flex-shrink: 0;
+            /* 修正：加上背景色確保邊緣看起來正常 */
+            background-color: #e6b356;
+        }
+
+        .board {
+            width: 450px;
+            height: 450px;
+            background-color: #e6b356;
+            position: relative;
+            cursor: pointer;
+        }
+
+        .grid-line-h, .grid-line-v {
+            position: absolute;
+            background-color: #5d4037;
+            z-index: 0;
+            pointer-events: none; /* 關鍵修正：讓線條不會阻擋點擊事件 */
+        }
+        .grid-line-h { height: 1px; left: 15px; width: 420px; }
+        .grid-line-v { width: 1px; top: 15px; height: 420px; }
+        
+        .star-point {
+            width: 8px; height: 8px;
+            background: #5d4037;
+            border-radius: 50%;
+            position: absolute;
+            transform: translate(-50%, -50%);
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        .piece {
+            width: 26px; height: 26px;
+            border-radius: 50%;
+            position: absolute;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            box-shadow: 2px 2px 3px rgba(0,0,0,0.3);
+            pointer-events: none; /* 棋子也不要擋住點擊，避免誤判 */
+        }
+        .piece.black { background: radial-gradient(circle at 30% 30%, #666, #000); }
+        .piece.white { background: radial-gradient(circle at 30% 30%, #fff, #ddd); border: 1px solid #ccc; }
+        .piece.last::after {
+            content: ''; position: absolute; top: 50%; left: 50%;
+            width: 6px; height: 6px; background: red; border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .loading {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8); color: white;
+            padding: 20px; border-radius: 10px;
+            display: none; z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>HTML AI 五子棋</h1>
+    
+    <div class="controls">
+        <label>難度: 
+            <select id="difficulty">
+                <option value="1">簡單</option>
+                <option value="2" selected>普通</option>
+                <option value="3">困難</option>
+            </select>
+        </label>
+        <button onclick="resetGame()">重來</button>
+        <span id="status">輪到黑棋</span>
+    </div>
+
+    <div class="board-wrapper" id="boardWrapper">
+        <div class="board" id="board" onclick="handleBoardClick(event)"></div>
+    </div>
+    
+    <div id="loading" class="loading">電腦思考中...</div>
+
+<script>
+    const SIZE = 15;
+    let board = []; 
+    let turn = 1; 
+    let gameOver = false;
+
+    const boardEl = document.getElementById('board');
+    const statusEl = document.getElementById('status');
+    const loadingEl = document.getElementById('loading');
+    
+    function initUI() {
+        boardEl.innerHTML = '';
+        for(let i=0; i<SIZE; i++) {
+            let line = document.createElement('div');
+            line.className = 'grid-line-h';
+            line.style.top = (15 + i * 30) + 'px';
+            boardEl.appendChild(line);
+        }
+        for(let i=0; i<SIZE; i++) {
+            let line = document.createElement('div');
+            line.className = 'grid-line-v';
+            line.style.left = (15 + i * 30) + 'px';
+            boardEl.appendChild(line);
+        }
+        const stars = [[3,3], [11,3], [7,7], [3,11], [11,11]];
+        stars.forEach(([x, y]) => {
+            let dot = document.createElement('div');
+            dot.className = 'star-point';
+            dot.style.left = (15 + x * 30) + 'px';
+            dot.style.top = (15 + y * 30) + 'px';
+            boardEl.appendChild(dot);
+        });
+    }
+
+    function resetGame() {
+        // 初始化 15x15 的空棋盤
+        board = Array(SIZE).fill(null).map(() => Array(SIZE).fill(0));
+        turn = 1;
+        gameOver = false;
+        
+        // 移除舊棋子
+        document.querySelectorAll('.piece').forEach(e => e.remove());
+        statusEl.innerText = "輪到黑棋";
+        
+        // 確保重新開始時也適配螢幕
+        fitToScreen();
+    }
+
+    function renderPiece(x, y, player) {
+        let p = document.createElement('div');
+        p.className = `piece ${player === 1 ? 'black' : 'white'} last`;
+        p.style.left = (15 + x * 30) + 'px';
+        p.style.top = (15 + y * 30) + 'px';
+        document.querySelectorAll('.piece.last').forEach(e => e.classList.remove('last'));
+        boardEl.appendChild(p);
+    }
+
+    function checkWin(x, y, player) {
+        const directions = [[1,0], [0,1], [1,1], [1,-1]];
+        for (let [dx, dy] of directions) {
+            let count = 1;
+            let tx = x + dx, ty = y + dy;
+            while (tx >= 0 && tx < SIZE && ty >= 0 && ty < SIZE && board[ty][tx] === player) {
+                count++; tx += dx; ty += dy;
+            }
+            tx = x - dx; ty = y - dy;
+            while (tx >= 0 && tx < SIZE && ty >= 0 && ty < SIZE && board[ty][tx] === player) {
+                count++; tx -= dx; ty -= dy;
+            }
+            if (count >= 5) return true;
+        }
+        return false;
+    }
+
+    function handleBoardClick(e) {
+        // 如果遊戲還沒開始 (board是空的) 或 結束了，不反應
+        if (gameOver || turn !== 1 || board.length === 0) return;
+
+        let rect = boardEl.getBoundingClientRect();
+        let scaleX = rect.width / SIZE;
+        let scaleY = rect.height / SIZE;
+
+        let x = Math.floor((e.clientX - rect.left) / scaleX);
+        let y = Math.floor((e.clientY - rect.top) / scaleY);
+
+        if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
+            if (board[y][x] === 0) {
+                makeMove(x, y, 1);
+            }
+        }
+    }
+
+    function makeMove(x, y, player) {
+        board[y][x] = player;
+        renderPiece(x, y, player);
+
+        if (checkWin(x, y, player)) {
+            statusEl.innerText = (player === 1 ? "黑棋" : "白棋") + " 獲勝!";
+            gameOver = true;
+            setTimeout(() => alert((player === 1 ? "恭喜你贏了!" : "電腦贏了!")), 100);
+            return;
+        }
+
+        turn = (player === 1) ? 2 : 1;
+        statusEl.innerText = (turn === 1 ? "輪到黑棋" : "輪到白棋");
+
+        if (turn === 2 && !gameOver) {
+            loadingEl.style.display = 'block';
+            setTimeout(aiMove, 50);
+        }
+    }
+
+    // --- AI ---
+    function aiMove() {
+        let difficulty = parseInt(document.getElementById('difficulty').value);
+        let move;
+        if (difficulty === 1) move = getEasyMove();
+        else if (difficulty === 2) move = getNormalMove();
+        else move = getHardMove();
+
+        loadingEl.style.display = 'none';
+        if (move) makeMove(move.x, move.y, 2);
+        else { alert("和局!"); gameOver = true; }
+    }
+
+    function getEasyMove() {
+        let candidates = [];
+        for (let y = 0; y < SIZE; y++) {
+            for (let x = 0; x < SIZE; x++) {
+                if (board[y][x] === 0 && hasNeighbor(x, y, 2)) candidates.push({x, y});
+            }
+        }
+        return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : {x: 7, y: 7};
+    }
+
+    function getNormalMove() {
+        let bestScore = -Infinity, bestMoves = [];
+        for (let y = 0; y < SIZE; y++) {
+            for (let x = 0; x < SIZE; x++) {
+                if (board[y][x] === 0 && hasNeighbor(x, y, 2)) {
+                    let score = evaluatePoint(x, y, 2) + evaluatePoint(x, y, 1);
+                    if (score > bestScore) { bestScore = score; bestMoves = [{x, y}]; }
+                    else if (score === bestScore) bestMoves.push({x, y});
+                }
+            }
+        }
+        return bestMoves.length ? bestMoves[Math.floor(Math.random() * bestMoves.length)] : {x: 7, y: 7};
+    }
+    
+    function getHardMove() {
+        let win = findImmediateWin(2); if(win) return win;
+        let block = findImmediateWin(1); if(block) return block;
+        let bestScore = -Infinity, bestMoves = [];
+        for (let y = 0; y < SIZE; y++) {
+            for (let x = 0; x < SIZE; x++) {
+                if (board[y][x] === 0 && hasNeighbor(x, y, 2)) {
+                    let attack = evaluatePoint(x, y, 2);
+                    let defend = evaluatePoint(x, y, 1);
+                    if (attack > 1000) attack *= 1.2;
+                    let score = attack * 1.0 + defend * 0.9; 
+                    if (score > bestScore) { bestScore = score; bestMoves = [{x, y}]; }
+                    else if (score === bestScore) bestMoves.push({x, y});
+                }
+            }
+        }
+        return bestMoves.length ? bestMoves[Math.floor(Math.random() * bestMoves.length)] : {x: 7, y: 7};
+    }
+
+    function hasNeighbor(x, y, dist) {
+        for (let dy = -dist; dy <= dist; dy++) for (let dx = -dist; dx <= dist; dx++) {
+            if (dy === 0 && dx === 0) continue;
+            let nx = x + dx, ny = y + dy;
+            if (nx >= 0 && nx < SIZE && ny >= 0 && ny < SIZE && board[ny][nx] !== 0) return true;
+        }
+        return false;
+    }
+
+    function findImmediateWin(player) {
+        for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
+            if (board[y][x] === 0 && hasNeighbor(x, y, 1)) {
+                let score = evaluatePoint(x, y, player);
+                if (score >= 100000) return {x, y};
+                if (score >= 10000 && player === 2) return {x, y};
+            }
+        }
+        return null;
+    }
+
+    function evaluatePoint(x, y, player) {
+        let totalScore = 0;
+        board[y][x] = player;
+        const directions = [[1,0], [0,1], [1,1], [1,-1]];
+        for (let [dx, dy] of directions) totalScore += getLineScore(x, y, dx, dy, player);
+        board[y][x] = 0;
+        return totalScore;
+    }
+
+    function getLineScore(x, y, dx, dy, player) {
+        let count = 1, emptySide = 0;
+        let i = 1;
+        while(true) {
+            let tx = x + dx*i, ty = y + dy*i;
+            if(tx < 0 || tx >= SIZE || ty < 0 || ty >= SIZE) break;
+            if(board[ty][tx] === player) count++; else if(board[ty][tx] === 0) { emptySide++; break; } else break;
+            i++;
+        }
+        i = 1;
+        while(true) {
+            let tx = x - dx*i, ty = y - dy*i;
+            if(tx < 0 || tx >= SIZE || ty < 0 || ty >= SIZE) break;
+            if(board[ty][tx] === player) count++; else if(board[ty][tx] === 0) { emptySide++; break; } else break;
+            i++;
+        }
+        if (count >= 5) return 100000;
+        if (count === 4) return (emptySide === 2) ? 10000 : 2000;
+        if (count === 3) return (emptySide === 2) ? 1000 : 100;
+        if (count === 2) return (emptySide === 2) ? 50 : 0;
+        return 0;
+    }
+
+    function fitToScreen() {
+        const wrapper = document.getElementById('boardWrapper');
+        const screenWidth = window.innerWidth;
+        const baseSize = 460;
+        if (screenWidth < baseSize) {
+            const scale = (screenWidth - 20) / 450;
+            wrapper.style.transform = `scale(${scale})`;
+            wrapper.style.transformOrigin = 'top center';
+            const heightDiff = 450 * (1 - scale);
+            wrapper.style.marginBottom = `-${heightDiff}px`; 
+        } else {
+            wrapper.style.transform = 'none';
+            wrapper.style.marginBottom = '0';
+        }
+    }
+    
+    window.addEventListener('resize', fitToScreen);
+
+    // 啟動程序
+    initUI();
+    resetGame(); // 這一行就是之前漏掉的！現在加上後，一進去就能玩了
+
+</script>
+</body>
+</html>
