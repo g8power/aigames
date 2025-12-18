@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>HTML AI 西洋棋 (手機版)</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #302e2b; /* 深色背景 */
+            color: #ccc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 10px;
+            user-select: none;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+        h1 { margin: 10px 0; font-size: 24px; color: #eee; }
+        .controls {
+            margin-bottom: 15px;
+            background: #262421;
+            padding: 10px 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 50;
+        }
+        select, button {
+            padding: 6px 10px;
+            font-size: 14px;
+            cursor: pointer;
+            background: #444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:active { background: #666; }
+        #status { font-weight: bold; color: #81b64c; min-width: 80px; text-align: center; }
+
+        .board-container {
+            position: relative;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+            /* 邊框裝飾 */
+            padding: 5px;
+            background: #262421;
+            border-radius: 4px;
+        }
+
+        .board {
+            width: 400px;
+            height: 400px;
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            grid-template-rows: repeat(8, 1fr);
+            position: relative;
+        }
+
+        /* 棋盤格子顏色 */
+        .square {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 38px; /* 棋子大小 */
+            cursor: pointer;
+            position: relative;
+        }
+        .square.light { background-color: #eeeed2; color: black; }
+        .square.dark { background-color: #769656; color: black; } /* 經典綠色棋盤 */
+        
+        /* 選中與移動提示 */
+        .square.selected { background-color: #baca44 !important; }
+        .square.last-move { background-color: #f5f682 !important; opacity: 0.8; }
+        
+        /* 合法移動的小圓點 */
+        .dot {
+            width: 12px; height: 12px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 50%;
+            position: absolute;
+            pointer-events: none;
+        }
+        .square.dark .dot { background: rgba(0,0,0,0.3); }
+
+        /* 棋子樣式 (使用 Unicode) */
+        .piece {
+            cursor: pointer;
+            z-index: 10;
+            /* 防止點擊穿透問題，但這裡我們是點擊 square */
+            pointer-events: none; 
+            /* 讓字體有些陰影更有立體感 */
+            filter: drop-shadow(1px 2px 2px rgba(0,0,0,0.4));
+        }
+        /* 白棋 */
+        .piece.white { color: #fff; text-shadow: 0 0 2px #000; }
+        /* 黑棋 */
+        .piece.black { color: #000; }
+
+        .loading {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.85); color: white;
+            padding: 15px 25px; border-radius: 8px;
+            display: none; z-index: 100; font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>HTML AI 西洋棋</h1>
+    
+    <div class="controls">
+        <label>難度: 
+            <select id="difficulty">
+                <option value="1">簡單</option>
+                <option value="2" selected>普通</option>
+                <option value="3">困難</option>
+            </select>
+        </label>
+        <button onclick="resetGame()">新局</button>
+        <span id="status">白方走棋</span>
+    </div>
+
+    <div class="board-container" id="boardContainer">
+        <div class="board" id="board">
+            </div>
+    </div>
+    
+    <div id="loading" class="loading">思考中...</div>
+
+<script>
+    // --- 參數 ---
+    const BOARD_SIZE = 8;
+    // 0-63, a8=0, h8=7, a1=56, h1=63
+    // 小寫=黑, 大寫=白
+    const START_FEN = "rnbqkbnrpppppppp................................PPPPPPPPRNBQKBNR";
+    
+    // 棋子價值 (AI用)
+    const PIECE_VALUES = {
+        'p': 10, 'n': 30, 'b': 30, 'r': 50, 'q': 90, 'k': 900,
+        'P': 10, 'N': 30, 'B': 30, 'R': 50, 'Q': 90, 'K': 900
+    };
+    
+    // 符號映射
+    const SYMBOLS = {
+        'p': '♟', 'n': '♞', 'b': '♝', 'r': '♜', 'q': '♛', 'k': '♚',
+        'P': '♙', 'N': '♘', 'B': '♗', 'R': '♖', 'Q': '♕', 'K': '♔'
+    };
+
+    let board = [];
+    let turn = 'w'; // 'w' or 'b'
+    let selectedIdx = -1;
+    let legalMoves = []; // 存儲合法移動的目標索引
+    let gameOver = false;
+    let lastMove = {from: -1, to: -1};
+
+    const boardEl = document.getElementById('board');
+    const containerEl = document.getElementById('boardContainer');
+    const statusEl = document.getElementById('status');
+    const loadingEl = document.getElementById('loading');
+
+    // --- 初始化 ---
+    function initBoard() {
+        boardEl.innerHTML = '';
+        for (let i = 0; i < 64; i++) {
+            let div = document.createElement('div');
+            let row = Math.floor(i / 8);
+            let col = i % 8;
+            let isLight = (row + col) % 2 === 0;
+            div.className = `square ${isLight ? 'light' : 'dark'}`;
+            div.dataset.idx = i;
+            // 綁定點擊事件 (修正版邏輯)
+            div.onclick = (e) => handleSquareClick(i);
+            boardEl.appendChild(div);
+        }
+    }
+
+    function resetGame() {
+        board = START_FEN.split('');
+        turn = 'w';
+        gameOver = false;
+        selectedIdx = -1;
+        legalMoves = [];
+        lastMove = {from: -1, to: -1};
+        statusEl.innerText = "白方走棋";
+        render();
+        fitToScreen();
+    }
+
+    function render() {
+        const squares = document.querySelectorAll('.square');
+        squares.forEach((sq, i) => {
+            // 清除舊內容
+            sq.innerHTML = '';
+            sq.classList.remove('selected', 'last-move');
+
+            // 繪製棋子
+            let char = board[i];
+            if (char !== '.') {
+                let span = document.createElement('span');
+                span.className = `piece ${isWhite(char) ? 'white' : 'black'}`;
+                span.innerText = SYMBOLS[char];
+                sq.appendChild(span);
+            }
+
+            // 狀態標記
+            if (i === selectedIdx) sq.classList.add('selected');
+            if (i === lastMove.from || i === lastMove.to) sq.classList.add('last-move');
+
+            // 合法移動提示點
+            if (legalMoves.includes(i)) {
+                let dot = document.createElement('div');
+                dot.className = 'dot';
+                sq.appendChild(dot);
+            }
+        });
+    }
+
+    // --- 遊戲邏輯 ---
+
+    function isWhite(char) { return char >= 'A' && char <= 'Z'; }
+    function isBlack(char) { return char >= 'a' && char <= 'z'; }
+    function isEmpty(char) { return char === '.'; }
+    function getColor(char) { 
+        if(char === '.') return null;
+        return isWhite(char) ? 'w' : 'b';
+    }
+
+    function handleSquareClick(idx) {
+        if (gameOver || turn === 'b') return; // AI回合鎖定
+
+        let char = board[idx];
+        let pieceColor = getColor(char);
+
+        // 1. 如果點擊了合法的移動目標 -> 移動
+        if (legalMoves.includes(idx)) {
+            makeMove(selectedIdx, idx);
+            return;
+        }
+
+        // 2. 如果點擊了自己的棋子 -> 選中
+        if (pieceColor === turn) {
+            selectedIdx = idx;
+            legalMoves = getLegalMoves(idx, board);
+            render();
+        } 
+        // 3. 點擊空白或敵方且不在合法移動內 -> 取消選中
+        else {
+            selectedIdx = -1;
+            legalMoves = [];
+            render();
+        }
+    }
+
+    function makeMove(from, to) {
+        // 執行移動
+        let piece = board[from];
+        board[to] = piece;
+        board[from] = '.';
+
+        // 兵升變 (簡化規則：到達底線自動變后)
+        if (piece === 'P' && to < 8) board[to] = 'Q';
+        if (piece === 'p' && to >= 56) board[to] = 'q';
+
+        lastMove = {from, to};
+        
+        // 檢查勝負 (簡單版：如果王被吃掉就算輸 - 雖然正規規則是Checkmate，但簡化AI運算這最有效)
+        // 在這裡我們先切換回合，然後看對手還有沒有合法的步數
+        turn = (turn === 'w') ? 'b' : 'w';
+        selectedIdx = -1;
+        legalMoves = [];
+        render();
+
+        // 檢查對手是否有合法棋步 (Checkmate/Stalemate detection)
+        if (!hasLegalMoves(turn)) {
+            gameOver = true;
+            statusEl.innerText = (turn === 'w' ? "黑方" : "白方") + " 獲勝!";
+            alert("遊戲結束！" + statusEl.innerText);
+            return;
+        }
+
+        statusEl.innerText = (turn === 'w' ? "白方" : "黑方") + " 思考中";
+
+        if (turn === 'b' && !gameOver) {
+            loadingEl.style.display = 'block';
+            setTimeout(aiMove, 50);
+        }
+    }
+
+    // --- 移動規則引擎 ---
+
+    function getLegalMoves(idx, currentBoard) {
+        let moves = [];
+        let piece = currentBoard[idx];
+        let color = isWhite(piece) ? 'w' : 'b';
+        let row = Math.floor(idx / 8);
+        let col = idx % 8;
+
+        const addMove = (r, c) => {
+            if (r < 0 || r > 7 || c < 0 || c > 7) return false;
+            let targetIdx = r * 8 + c;
+            let targetChar = currentBoard[targetIdx];
+            
+            // 碰到自己人 -> 停
+            if (getColor(targetChar) === color) return false;
+            
+            // 嘗試移動並檢查是否會導致自己被將軍 (為求效能，簡單模式略過此檢查，困難模式可加)
+            // 這裡為了保持流暢度，僅排除顯而易見的自殺步(可選)
+            moves.push(targetIdx);
+
+            // 碰到敵人 -> 吃掉並停
+            return (targetChar === '.'); 
+        };
+
+        const type = piece.toLowerCase();
+
+        if (type === 'p') { // 兵
+            let dir = (color === 'w') ? -1 : 1;
+            let startRow = (color === 'w') ? 6 : 1;
+            
+            // 前進1格
+            let r1 = row + dir;
+            if (r1 >= 0 && r1 <= 7 && currentBoard[r1*8+col] === '.') {
+                moves.push(r1*8+col);
+                // 前進2格
+                let r2 = row + dir * 2;
+                if (row === startRow && currentBoard[r2*8+col] === '.') {
+                    moves.push(r2*8+col);
+                }
+            }
+            // 吃子 (斜向)
+            [[dir, -1], [dir, 1]].forEach(([dr, dc]) => {
+                let tr = row + dr, tc = col + dc;
+                if (tr >= 0 && tr <= 7 && tc >= 0 && tc <= 7) {
+                    let target = currentBoard[tr*8+tc];
+                    if (target !== '.' && getColor(target) !== color) {
+                        moves.push(tr*8+tc);
+                    }
+                }
+            });
+        } else if (type === 'n') { // 騎士
+            [[1,2],[1,-2],[-1,2],[-1,-2],[2,1],[2,-1],[-2,1],[-2,-1]].forEach(([dr, dc]) => {
+                addMove(row+dr, col+dc);
+            });
+        } else if (type === 'k') { // 國王
+            [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr, dc]) => {
+                addMove(row+dr, col+dc);
+            });
+        } else { // 滑動棋子 (主教, 車, 皇后)
+            let directions = [];
+            if (type === 'b' || type === 'q') directions.push([1,1],[1,-1],[-1,1],[-1,-1]);
+            if (type === 'r' || type === 'q') directions.push([1,0],[-1,0],[0,1],[0,-1]);
+            
+            directions.forEach(([dr, dc]) => {
+                let r = row + dr, c = col + dc;
+                while (true) {
+                    if (!addMove(r, c)) break; // 碰到邊界或棋子就停
+                    // 如果剛剛那格是敵人，也要停(已經在addMove裡處理了添加邏輯，這裡確認是否繼續迴圈)
+                    let targetIdx = r * 8 + c;
+                    if (currentBoard[targetIdx] !== '.') break;
+                    r += dr; c += dc;
+                }
+            });
+        }
+
+        return moves;
+    }
+
+    function hasLegalMoves(side) {
+        for (let i = 0; i < 64; i++) {
+            let p = board[i];
+            if (p !== '.' && getColor(p) === side) {
+                if (getLegalMoves(i, board).length > 0) return true;
+            }
+        }
+        return false;
+    }
+
+    // --- AI 核心 ---
+
+    function aiMove() {
+        let depth = parseInt(document.getElementById('difficulty').value);
+        // 難度映射: 1->Depth 1 (Randomish), 2->Depth 2, 3->Depth 3 with PST
+        let searchDepth = (depth === 1) ? 1 : (depth === 2 ? 2 : 3);
+        
+        let bestMove = minimaxRoot(searchDepth, true);
+        
+        loadingEl.style.display = 'none';
+        if (bestMove) {
+            makeMove(bestMove.from, bestMove.to);
+        } else {
+            // 無棋可走
+            gameOver = true;
+            alert("黑方無棋可走 (Checkmate or Stalemate)");
+        }
+    }
+
+    function evaluate(tempBoard) {
+        let score = 0;
+        for (let i = 0; i < 64; i++) {
+            let p = tempBoard[i];
+            if (p === '.') continue;
+            
+            let val = PIECE_VALUES[p] || 0;
+            
+            // 簡單的位置加權 (鼓勵中心控制)
+            let row = Math.floor(i/8), col = i%8;
+            let centerBonus = (row > 2 && row < 5 && col > 2 && col < 5) ? 5 : 0;
+            
+            // 兵的推進加分
+            if (p === 'p') val += row * 2; // 黑兵往下走(row增加)加分
+            if (p === 'P') val += (7 - row) * 2; // 白兵往上走(row減少)加分
+
+            if (isBlack(p)) score += (val + centerBonus);
+            else score -= (val + centerBonus);
+        }
+        return score;
+    }
+
+    function minimaxRoot(depth, isMaximizing) {
+        let moves = generateAllMoves('b');
+        if (moves.length === 0) return null;
+
+        // 隨機打亂增加變化性
+        moves.sort(() => Math.random() - 0.5);
+
+        let bestMove = null;
+        let bestValue = -Infinity;
+
+        for (let move of moves) {
+            // 模擬移動
+            let savedTarget = board[move.to];
+            board[move.to] = board[move.from];
+            board[move.from] = '.';
+            
+            // 簡單升變處理
+            let promoted = false;
+            if(board[move.to] === 'p' && move.to >= 56) { board[move.to] = 'q'; promoted = true; }
+
+            // 如果吃掉國王，這就是絕對勝利 (簡化判定)
+            if (savedTarget === 'K') {
+                undo(move, savedTarget, promoted);
+                return move;
+            }
+
+            let value = minimax(depth - 1, -Infinity, Infinity, !isMaximizing);
+            
+            undo(move, savedTarget, promoted);
+
+            if (value >= bestValue) {
+                bestValue = value;
+                bestMove = move;
+            }
+        }
+        return bestMove;
+    }
+
+    function minimax(depth, alpha, beta, isMaximizing) {
+        if (depth === 0) return evaluate(board);
+
+        let side = isMaximizing ? 'b' : 'w';
+        let moves = generateAllMoves(side);
+        
+        if (moves.length === 0) return isMaximizing ? -10000 : 10000;
+
+        if (isMaximizing) { // Black AI
+            let bestVal = -Infinity;
+            for (let move of moves) {
+                let savedTarget = board[move.to];
+                board[move.to] = board[move.from];
+                board[move.from] = '.';
+                let promoted = false;
+                if(board[move.to] === 'p' && move.to >= 56) { board[move.to] = 'q'; promoted = true; }
+                
+                if (savedTarget === 'K') { undo(move, savedTarget, promoted); return 10000; }
+
+                let value = minimax(depth - 1, alpha, beta, false);
+                undo(move, savedTarget, promoted);
+                
+                bestVal = Math.max(bestVal, value);
+                alpha = Math.max(alpha, bestVal);
+                if (beta <= alpha) break;
+            }
+            return bestVal;
+        } else { // White Player (simulation)
+            let bestVal = Infinity;
+            for (let move of moves) {
+                let savedTarget = board[move.to];
+                board[move.to] = board[move.from];
+                board[move.from] = '.';
+                let promoted = false;
+                if(board[move.to] === 'P' && move.to < 8) { board[move.to] = 'Q'; promoted = true; }
+
+                if (savedTarget === 'k') { undo(move, savedTarget, promoted); return -10000; }
+
+                let value = minimax(depth - 1, alpha, beta, true);
+                undo(move, savedTarget, promoted);
+                
+                bestVal = Math.min(bestVal, value);
+                beta = Math.min(beta, bestVal);
+                if (beta <= alpha) break;
+            }
+            return bestVal;
+        }
+    }
+
+    function undo(move, savedTarget, promoted) {
+        board[move.from] = board[move.to];
+        board[move.to] = savedTarget;
+        // 如果剛剛發生升變，要變回兵
+        if(promoted) {
+            board[move.from] = isWhite(board[move.from]) ? 'P' : 'p'; // 但AI只會動黑棋，這裡邏輯通用一下
+            // 嚴謹一點：
+            if (board[move.from] === 'q' && move.to >= 56) board[move.from] = 'p';
+            if (board[move.from] === 'Q' && move.to < 8) board[move.from] = 'P';
+        }
+    }
+
+    function generateAllMoves(side) {
+        let allMoves = [];
+        for (let i = 0; i < 64; i++) {
+            if (board[i] !== '.' && getColor(board[i]) === side) {
+                let moves = getLegalMoves(i, board);
+                moves.forEach(to => allMoves.push({from: i, to: to}));
+            }
+        }
+        return allMoves;
+    }
+
+    // --- 介面適配 ---
+    function fitToScreen() {
+        const wrapper = document.getElementById('boardContainer');
+        const screenWidth = window.innerWidth;
+        const baseWidth = 410; // 400 + padding
+        
+        if (screenWidth < baseWidth) {
+            const scale = (screenWidth - 20) / 400;
+            wrapper.style.transform = `scale(${scale})`;
+            wrapper.style.transformOrigin = 'top center';
+            const heightDiff = 400 * (1 - scale);
+            wrapper.style.marginBottom = `-${heightDiff}px`; 
+        } else {
+            wrapper.style.transform = 'none';
+            wrapper.style.marginBottom = '0';
+        }
+    }
+    window.addEventListener('resize', fitToScreen);
+
+    // 啟動
+    initBoard();
+    resetGame();
+    fitToScreen();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G8Power AI Game Center</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka+One&family=Noto+Sans+TC:wght@400;700&display=swap');
+
+        :root {
+            --bg-dark: #0f172a;
+            --card-bg: rgba(255, 255, 255, 0.1);
+            --text-color: #ffffff;
+            --primary-color: #6a11cb;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-x: hidden;
+        }
+
+        /* 背景動畫 */
+        .background-animation {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1;
+            background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+            opacity: 0.8;
+        }
+        .overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.6); z-index: -1;
+        }
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        header { text-align: center; padding: 60px 20px 40px; animation: fadeInDown 1s ease-out; }
+        h1 {
+            font-family: 'Fredoka One', cursive; font-size: 3.5rem; letter-spacing: 2px;
+            background: linear-gradient(to right, #fff, #a5f3fc);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            text-shadow: 0 4px 15px rgba(0,0,0,0.3); margin-bottom: 10px;
+        }
+        p.subtitle { font-size: 1.2rem; color: #e2e8f0; max-width: 600px; margin: 0 auto; }
+
+        /* 讀取中的動畫 */
+        .loading {
+            font-size: 1.5rem; color: #fff; margin-top: 50px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .loading::after {
+            content: ''; width: 20px; height: 20px;
+            border: 3px solid #fff; border-top: 3px solid transparent;
+            border-radius: 50%; animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .game-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            width: 90%; max-width: 1200px; padding: 20px; margin-bottom: 60px;
+        }
+
+        .game-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px; padding: 30px;
+            text-decoration: none; color: white;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex; flex-direction: column; align-items: center; text-align: center;
+            opacity: 0; animation: popIn 0.5s forwards; /* 初始隱藏，用JS控制出現 */
+        }
+        @keyframes popIn { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
+
+        .game-card:hover {
+            transform: translateY(-15px) scale(1.03);
+            background: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+
+        .icon-wrapper {
+            width: 80px; height: 80px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 3rem; margin-bottom: 20px;
+            background: rgba(255,255,255,0.1);
+            transition: transform 0.4s;
+        }
+        .game-card:hover .icon-wrapper { transform: rotate(15deg) scale(1.1); }
+
+        .game-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 10px; word-break: break-word;}
+        .game-desc { font-size: 0.95rem; color: rgba(255,255,255,0.8); margin-bottom: 20px; flex-grow: 1; }
+        
+        .play-btn {
+            background: white; color: var(--bg-dark);
+            padding: 10px 25px; border-radius: 50px;
+            font-weight: bold; text-transform: uppercase; font-size: 0.9rem;
+            transition: 0.3s;
+        }
+        .game-card:hover .play-btn { background: var(--primary-color); color: white; }
+
+        footer { margin-top: auto; padding: 20px; color: rgba(255,255,255,0.5); font-size: 0.8rem; }
+        
+        @keyframes fadeInDown { from { opacity: 0; transform: translateY(-30px); } to { opacity: 1; transform: translateY(0); } }
+        @media (max-width: 600px) { h1 { font-size: 2.5rem; } }
+    </style>
+</head>
+<body>
+
+    <div class="background-animation"></div>
+    <div class="overlay"></div>
+
+    <header>
+        <h1>AI Game Station</h1>
+        <p class="subtitle">自動抓取最新上架的 AI 互動遊戲</p>
+    </header>
+
+    <div id="loading-msg" class="loading">正在掃描遊戲庫...</div>
+    <div class="game-container" id="game-list"></div>
+
+    <footer>
+        &copy; 2024 G8Power AI Games Collection. Auto-generated via GitHub API.
+    </footer>
+
+    <script>
+        // 設定：請確認你的 GitHub 帳號與 Repo 名稱
+        const GITHUB_USERNAME = 'g8power';
+        const GITHUB_REPO = 'aigames';
+        
+        // 黑名單：不想顯示的資料夾名稱寫在這裡
+        const IGNORE_FOLDERS = ['.git', 'css', 'js', 'images', 'assets', '.github', 'CNAME'];
+
+        // 手動設定：如果想幫特定遊戲加上自訂描述或圖示，可以在這裡設定
+        // 如果沒設定，系統會自動產生預設值
+        const GAME_METADATA = {
+            'DailyEnglishAI': { icon: '📚', desc: '每日英語 AI 助手，提升語言能力。' },
+            'AIGoCoach': { icon: '🧘', desc: '專業的 AI 圍棋教練，分析棋局。' },
+            'Reversi': { icon: '⚪', desc: '經典黑白棋對決，挑戰邏輯思維。' },
+            'Jetpack': { icon: '🚀', desc: '噴射背包大冒險，挑戰極限高度！' }
+        };
+
+        // 隨機圖示庫 (給未設定的遊戲用)
+        const RANDOM_ICONS = ['🎮', '🕹️', '🎲', '🧩', '👾', '🔥', '✨', '🏆'];
+
+        // 隨機顏色漸層 (給圖示背景用)
+        const GRADIENTS = [
+            'linear-gradient(135deg, #FF9A9E 0%, #FECFEF 100%)',
+            'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)',
+            'linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%)',
+            'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+            'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)'
+        ];
+
+        async function fetchGames() {
+            const container = document.getElementById('game-list');
+            const loading = document.getElementById('loading-msg');
+            const apiUrl = `https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/`;
+
+            try {
+                const response = await fetch(apiUrl);
+                if (!response.ok) throw new Error('GitHub API Limit or Error');
+                
+                const data = await response.json();
+                
+                // 1. 過濾：只要資料夾 (dir) 且不在黑名單內
+                const games = data.filter(item => 
+                    item.type === 'dir' && !IGNORE_FOLDERS.includes(item.name)
+                );
+
+                loading.style.display = 'none';
+
+                if (games.length === 0) {
+                    container.innerHTML = '<p style="color:white">找不到任何遊戲資料夾。</p>';
+                    return;
+                }
+
+                // 2. 產生卡片
+                games.forEach((game, index) => {
+                    const name = game.name;
+                    // 取得自訂資料，如果沒有則使用預設
+                    const meta = GAME_METADATA[name] || {};
+                    const icon = meta.icon || RANDOM_ICONS[index % RANDOM_ICONS.length];
+                    const desc = meta.desc || '點擊立即開始體驗這款精彩的 AI 小遊戲！';
+                    const gradient = GRADIENTS[index % GRADIENTS.length];
+                    
+                    // 美化標題 (把 CamelCase 變成空格分隔，例如 AIGame -> AI Game)
+                    const displayName = name.replace(/([A-Z])/g, ' $1').trim();
+
+                    const cardHtml = `
+                        <a href="https://${GITHUB_USERNAME}.github.io/${GITHUB_REPO}/${name}" class="game-card" target="_blank" style="animation-delay: ${index * 0.1}s">
+                            <div class="icon-wrapper" style="background: ${gradient}">${icon}</div>
+                            <div class="game-title">${displayName}</div>
+                            <div class="game-desc">${desc}</div>
+                            <div class="play-btn">Play Now</div>
+                        </a>
+                    `;
+                    container.innerHTML += cardHtml;
+                });
+
+            } catch (error) {
+                console.error(error);
+                loading.innerText = '載入失敗，請稍後再試 (API Rate Limit)';
+                
+                // 失敗時的備案：顯示手動列表 (避免畫面全白)
+                loadFallback(container);
+            }
+        }
+
+        function loadFallback(container) {
+            // 如果 API 失敗（例如超過每小時60次請求），會顯示這裡的內容
+            container.innerHTML = `
+                <div style="grid-column: 1/-1; text-align: center; color: #aaa;">
+                    (目前無法自動抓取，顯示快取列表)
+                </div>
+                <a href="https://${GITHUB_USERNAME}.github.io/${GITHUB_REPO}/DailyEnglishAI" class="game-card" target="_blank">
+                    <div class="icon-wrapper">📚</div><div class="game-title">DailyEnglishAI</div><div class="play-btn">Play</div>
+                </a>
+            `;
+        }
+
+        // 執行抓取
+        fetchGames();
+    </script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D High-End Chess AI</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "gsap": "https://unpkg.com/gsap@3.12.5/index.js"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="ui-layer">
+        <div class="header">
+            <h1>MASTER CHESS 3D</h1>
+            <div id="status">準備就緒 - 白方先手</div>
+        </div>
+        <div class="controls">
+            <select id="difficulty">
+                <option value="1">簡單 (新手)</option>
+                <option value="2" selected>普通 (進階)</option>
+                <option value="3">困難 (大師)</option>
+            </select>
+            <button id="resetBtn">重新開始</button>
+        </div>
+        <div id="loading">AI 思考中...</div>
+    </div>
+    
+    <script type="module">
+        import { Game } from './js/Game.js';
+        window.onload = () => {
+            const game = new Game();
+            game.init();
+        };
+    </script>
+</body>
+</html>
