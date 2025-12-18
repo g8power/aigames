@@ -7,12 +7,12 @@ export class VisualBoard {
     constructor(containerId, onSquareClick) {
         this.factory = new PieceFactory();
         this.animator = new Animator();
-        this.pieces = new Array(64).fill(null); // 儲存 Mesh
-        this.squares = []; // 儲存格子 Mesh 用於點擊
+        this.pieces = new Array(64).fill(null);
         this.onClickCallback = onSquareClick;
 
         this.initScene();
         this.createBoard();
+        this.createInteractionLayer(); // 新增：隱形互動層
         this.setupInteraction();
     }
 
@@ -21,7 +21,7 @@ export class VisualBoard {
         this.scene.background = new THREE.Color(0x222222);
 
         this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
-        this.camera.position.set(0, 10, 12);
+        this.camera.position.set(3.5, 12, 12); // 調整相機中心點，對齊棋盤中心
 
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -31,24 +31,30 @@ export class VisualBoard {
 
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
-        this.controls.target.set(3.5, 0, 3.5);
+        this.controls.target.set(3.5, 0, 3.5); // 鎖定棋盤中心 (0~7 的中心是 3.5)
 
         // 燈光
-        const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+        const ambient = new THREE.AmbientLight(0xffffff, 0.5);
         this.scene.add(ambient);
 
-        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-        dirLight.position.set(5, 10, 5);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        dirLight.position.set(5, 15, 5);
         dirLight.castShadow = true;
         dirLight.shadow.mapSize.width = 2048;
         dirLight.shadow.mapSize.height = 2048;
+        // 擴大陰影範圍確保覆蓋全棋盤
+        dirLight.shadow.camera.left = -10;
+        dirLight.shadow.camera.right = 10;
+        dirLight.shadow.camera.top = 10;
+        dirLight.shadow.camera.bottom = -10;
         this.scene.add(dirLight);
+    }
 
-        // 點光源增加戲劇性
-        const spot = new THREE.SpotLight(0xffaa00, 5);
-        spot.position.set(0, 5, 0);
-        spot.angle = Math.PI/4;
-        this.scene.add(spot);
+    // 核心方法：統一管理座標，解決模型脫離問題
+    getCoord(index) {
+        const x = index % 8;
+        const z = Math.floor(index / 8);
+        return new THREE.Vector3(x, 0, z);
     }
 
     createBoard() {
@@ -56,17 +62,19 @@ export class VisualBoard {
         const matLight = new THREE.MeshStandardMaterial({ color: 0xebecd0, roughness: 0.5 });
         const matDark = new THREE.MeshStandardMaterial({ color: 0x779556, roughness: 0.5 });
 
-        for (let z = 0; z < 8; z++) {
-            for (let x = 0; x < 8; x++) {
-                const isLight = (x + z) % 2 === 0;
-                const geo = new THREE.BoxGeometry(1, 0.2, 1);
-                const square = new THREE.Mesh(geo, isLight ? matLight : matDark);
-                square.position.set(x, -0.1, z);
-                square.receiveShadow = true;
-                square.userData = { index: z * 8 + x };
-                boardGroup.add(square);
-                this.squares.push(square);
-            }
+        for (let i = 0; i < 64; i++) {
+            const x = i % 8;
+            const z = Math.floor(i / 8);
+            const isLight = (x + z) % 2 === 0;
+            const geo = new THREE.BoxGeometry(1, 0.2, 1);
+            const square = new THREE.Mesh(geo, isLight ? matLight : matDark);
+            
+            // 使用統一坐標，並稍微往下移一點點，讓棋子站在 0 平面上
+            const pos = this.getCoord(i);
+            square.position.set(pos.x, -0.1, pos.z);
+            
+            square.receiveShadow = true;
+            boardGroup.add(square);
         }
         
         // 木框
@@ -82,8 +90,8 @@ export class VisualBoard {
 
         // 提示光圈
         this.highlightMesh = new THREE.Mesh(
-            new THREE.RingGeometry(0.3, 0.4, 32),
-            new THREE.MeshBasicMaterial({ color: 0xffff00, side: THREE.DoubleSide })
+            new THREE.RingGeometry(0.35, 0.45, 32),
+            new THREE.MeshBasicMaterial({ color: 0xffff00, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
         );
         this.highlightMesh.rotation.x = -Math.PI/2;
         this.highlightMesh.visible = false;
@@ -93,49 +101,63 @@ export class VisualBoard {
         this.scene.add(this.dotsGroup);
     }
 
+    // --- 關鍵修正：建立隱形互動層 ---
+    createInteractionLayer() {
+        // 創建一個覆蓋整個棋盤的透明平面 (8x8 大小)
+        const geometry = new THREE.PlaneGeometry(8, 8);
+        // visible: false 代表看不見，但在 Raycaster 中仍然可以檢測到 (只要設定 recursive 或直接檢測它)
+        // 但為了保險，我們設為 visible: true 但 opacity: 0
+        const material = new THREE.MeshBasicMaterial({ color: 0xff0000, visible: false }); 
+        
+        this.interactionPlane = new THREE.Mesh(geometry, material);
+        this.interactionPlane.rotation.x = -Math.PI / 2; // 躺平
+        this.interactionPlane.position.set(3.5, 0.05, 3.5); // 稍微浮在格子上方一點點，防止被遮擋
+        this.scene.add(this.interactionPlane);
+    }
+
     setupInteraction() {
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
 
-        // --- 1. 電腦版滑鼠點擊 ---
-        this.renderer.domElement.addEventListener('click', (e) => {
-            // 防止點擊到 UI 層時觸發 (如果有穿透問題)
-            e.preventDefault();
-            this.checkIntersection(e.clientX, e.clientY);
-        });
-
-        // --- 2. 手機版觸控 (區分點擊與拖曳) ---
+        // 手機觸控邏輯變數
         let touchStartX = 0;
         let touchStartY = 0;
+        let isDragging = false;
 
+        const handleInputStart = (x, y) => {
+            touchStartX = x;
+            touchStartY = y;
+            isDragging = false;
+        };
+
+        const handleInputEnd = (x, y) => {
+            // 計算移動距離
+            const dx = Math.abs(x - touchStartX);
+            const dy = Math.abs(y - touchStartY);
+
+            // 如果移動超過 5px，視為旋轉鏡頭，不是點擊
+            if (dx > 5 || dy > 5) return;
+
+            // 執行點擊檢測
+            this.checkIntersection(x, y);
+        };
+
+        // 滑鼠事件
+        this.renderer.domElement.addEventListener('mousedown', (e) => handleInputStart(e.clientX, e.clientY));
+        this.renderer.domElement.addEventListener('mouseup', (e) => handleInputEnd(e.clientX, e.clientY));
+
+        // 觸控事件 (重要：passive: false 允許我們控制行為)
         this.renderer.domElement.addEventListener('touchstart', (e) => {
-            // 記錄手指按下的位置
-            if (e.touches.length > 0) {
-                touchStartX = e.touches[0].clientX;
-                touchStartY = e.touches[0].clientY;
-            }
+            if(e.touches.length > 0) handleInputStart(e.touches[0].clientX, e.touches[0].clientY);
         }, { passive: false });
 
         this.renderer.domElement.addEventListener('touchend', (e) => {
-            // 記錄手指放開的位置
-            if (e.changedTouches.length > 0) {
-                const touchEndX = e.changedTouches[0].clientX;
-                const touchEndY = e.changedTouches[0].clientY;
-
-                // 計算移動距離
-                const dx = touchEndX - touchStartX;
-                const dy = touchEndY - touchStartY;
-                
-                // 如果移動距離小於 10px，視為「點擊」；否則視為「旋轉鏡頭」
-                if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
-                    // 這是點擊
-                    // e.preventDefault(); // 視情況開啟，避免觸發多餘的 click
-                    this.checkIntersection(touchEndX, touchEndY);
-                }
+            if(e.changedTouches.length > 0) {
+                // e.preventDefault(); // 在某些手機瀏覽器防止雙擊縮放
+                handleInputEnd(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
             }
         }, { passive: false });
 
-        // --- 視窗縮放處理 ---
         window.addEventListener('resize', () => {
             this.camera.aspect = window.innerWidth / window.innerHeight;
             this.camera.updateProjectionMatrix();
@@ -145,21 +167,26 @@ export class VisualBoard {
         this.animate();
     }
 
-    // 新增這個輔助函式來處理座標轉換與射線檢測
     checkIntersection(clientX, clientY) {
-        // 將螢幕座標轉換為 -1 到 +1 的標準化設備座標 (NDC)
         this.mouse.x = (clientX / window.innerWidth) * 2 - 1;
         this.mouse.y = -(clientY / window.innerHeight) * 2 + 1;
 
         this.raycaster.setFromCamera(this.mouse, this.camera);
 
-        // 檢測是否點到格子 (使用遞迴檢測 true 以確保捕捉到子物件)
-        const intersects = this.raycaster.intersectObjects(this.squares, false); // 這裡 squares 應該是 Mesh 陣列
+        // --- 關鍵修正：只檢測隱形互動層 ---
+        // 這樣無論棋子多大、擋住哪裡，我們永遠檢測的是「平面上的座標」
+        const intersects = this.raycaster.intersectObject(this.interactionPlane);
 
         if (intersects.length > 0) {
-            // 找到最前面的物件，讀取其 index
-            const index = intersects[0].object.userData.index;
-            if (index !== undefined) {
+            const point = intersects[0].point;
+            
+            // 將世界座標轉換為棋盤格索引 (0~7)
+            const x = Math.round(point.x);
+            const z = Math.round(point.z);
+
+            // 邊界檢查
+            if (x >= 0 && x < 8 && z >= 0 && z < 8) {
+                const index = z * 8 + x;
                 this.onClickCallback(index);
             }
         }
@@ -182,10 +209,11 @@ export class VisualBoard {
             const char = logicBoard[i];
             if(char !== '.') {
                 const mesh = this.factory.createPiece(char);
-                const r = Math.floor(i/8), c = i%8;
-                mesh.position.set(c, 0, r);
                 
-                // 調整面向：騎士
+                // 使用統一座標系統，確保位置絕對正確
+                const pos = this.getCoord(i);
+                mesh.position.copy(pos);
+                
                 if(char.toLowerCase() === 'n') {
                     mesh.rotation.y = (char === 'N') ? Math.PI/2 : -Math.PI/2;
                 }
@@ -199,44 +227,46 @@ export class VisualBoard {
     async performMove(from, to, boardState, captured) {
         const piece = this.pieces[from];
         const victim = this.pieces[to];
-        const r = Math.floor(to/8), c = to%8;
-        const type = boardState[to]; // 已經是移動後的狀態，取得棋子類型
+        const type = boardState[to];
 
-        this.pieces[to] = piece; // 更新參考
+        this.pieces[to] = piece;
         this.pieces[from] = null;
 
-        // 如果有吃子，執行擊殺動畫
         if(victim && captured) {
-            this.animator.killPiece(victim);
+            await this.animator.killPiece(victim);
         }
 
-        // 執行移動動畫
-        await this.animator.movePiece(piece, new THREE.Vector3(c, 0, r), type);
+        // 使用統一座標系統作為目標
+        const targetPos = this.getCoord(to);
+        
+        await this.animator.movePiece(piece, targetPos, type);
+        
+        // --- 關鍵修正：動畫結束後強制校正位置 ---
+        // 防止 GSAP 動畫有微小誤差導致模型慢慢偏移
+        if(piece) piece.position.copy(targetPos);
     }
 
     updateHighlights(selected, moves) {
         if (selected !== -1) {
-            const r = Math.floor(selected / 8), c = selected % 8;
-            this.highlightMesh.position.set(c, 0.01, r);
+            const pos = this.getCoord(selected);
+            this.highlightMesh.position.set(pos.x, 0.02, pos.z);
             this.highlightMesh.visible = true;
         } else {
             this.highlightMesh.visible = false;
         }
 
-        // 清除舊點
         while(this.dotsGroup.children.length > 0) { 
             this.dotsGroup.remove(this.dotsGroup.children[0]); 
         }
 
-        // 產生合法移動點
         moves.forEach(idx => {
-            const r = Math.floor(idx / 8), c = idx % 8;
+            const pos = this.getCoord(idx);
             const dot = new THREE.Mesh(
                 new THREE.CircleGeometry(0.15, 16),
-                new THREE.MeshBasicMaterial({ color: 0x00ff00 })
+                new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 })
             );
             dot.rotation.x = -Math.PI/2;
-            dot.position.set(c, 0.02, r);
+            dot.position.set(pos.x, 0.05, pos.z); // 稍微調高，防止被棋盤遮擋
             this.dotsGroup.add(dot);
         });
     }
