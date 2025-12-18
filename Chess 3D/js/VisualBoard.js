@@ -201,16 +201,28 @@ export class VisualBoard {
     // --- 遊戲狀態同步 ---
 
     spawnPieces(logicBoard) {
-        // 清除舊棋子
-        this.pieces.forEach(p => { if(p) this.scene.remove(p); });
+        // 1. 徹底清除舊棋子
+        this.pieces.forEach(p => { 
+            if(p) {
+                // 關鍵：先殺死動畫，再刪除模型
+                import('gsap').then(({default: gsap}) => gsap.killTweensOf(p));
+                this.scene.remove(p);
+                // 釋放資源
+                p.traverse((node) => {
+                    if (node.isMesh) {
+                        node.geometry.dispose();
+                        node.material.dispose();
+                    }
+                });
+            } 
+        });
         this.pieces.fill(null);
 
+        // 2. 重新生成
         for(let i=0; i<64; i++) {
             const char = logicBoard[i];
             if(char !== '.') {
                 const mesh = this.factory.createPiece(char);
-                
-                // 使用統一座標系統，確保位置絕對正確
                 const pos = this.getCoord(i);
                 mesh.position.copy(pos);
                 
@@ -226,63 +238,67 @@ export class VisualBoard {
 
     async performMove(from, to, boardState, captured) {
         const piece = this.pieces[from];
-        let victim = this.pieces[to]; // 使用 let，因為我們可能需要強制清除它
+        const victim = this.pieces[to];
         const type = boardState[to];
 
-        // --- 修正 1: 安全檢查，如果找不到棋子模型，直接重生成並退出 (避免崩潰) ---
+        // 1. 防呆：如果來源棋子不見了，強制重繪
         if (!piece) {
-            console.warn("模型丟失，觸發自動修復...");
             this.spawnPieces(boardState);
             return;
         }
 
-        // --- 修正 2: 自殺防護機制 (Suicide Prevention) ---
-        // 這是最關鍵的一步！
-        // 如果「移動者(piece)」和「受害者(victim)」的記憶體 ID 一樣，代表狀態錯亂了
-        // 我們強制把 victim 視為無效，避免自己殺死自己
-        if (victim && piece.uuid === victim.uuid) {
-            console.log("偵測到自我重疊，取消擊殺判定");
-            victim = null; // 強制忽略受害者
-            captured = false; // 強制取消吃子狀態
-        }
-
-        // --- 修正 3: 幽靈清除 ---
-        // 如果目的地有東西，但邏輯說「沒吃子(captured=false)」，
-        // 那個東西必定是顯示錯誤的殘影 (Ghost)，直接刪除，不要播動畫
-        if (victim && !captured) {
-            this.scene.remove(victim);
-            if (victim.geometry) victim.geometry.dispose(); // 釋放記憶體
-            victim = null;
-        }
-
-        // 更新內部陣列狀態
-        this.pieces[to] = piece;
+        // 2. 清理來源位置
         this.pieces[from] = null;
 
-        // --- 執行擊殺動畫 (只有在受害者存在 且 不是自己時) ---
-        if(victim && captured) {
-            // 不要在這裡 await，讓擊殺動畫和移動動畫同時開始，比較流暢
-            this.animator.killPiece(victim); 
+        // 3. 處理吃子邏輯 (替身模式)
+        if (victim) {
+            // 如果是吃子 (captured = true)
+            if (captured) {
+                // A. 建立替身 (Clone)
+                const clone = victim.clone();
+                clone.position.copy(victim.position);
+                clone.rotation.copy(victim.rotation);
+                
+                // B. 確保替身材質也是獨立的 (避免影響其他棋子)
+                clone.traverse((node) => {
+                    if (node.isMesh) node.material = node.material.clone();
+                });
+                
+                this.scene.add(clone);
+
+                // C. 立刻刪除真身 (讓位給攻擊者)
+                this.scene.remove(victim);
+                
+                // D. 對替身播放死亡動畫 (這不會影響到任何人)
+                this.animator.killPiece(clone);
+            } else {
+                // 如果不是吃子 (可能是殘留的幽靈)，直接刪除
+                this.scene.remove(victim);
+            }
+            
+            // 確保陣列位置清空
+            this.pieces[to] = null;
         }
 
-        // 計算目標位置
+        // 4. 更新陣列：攻擊者就位
+        this.pieces[to] = piece;
+
+        // 5. 準備移動攻擊者
         const targetPos = this.getCoord(to);
-        
-        // --- 修正 4: 強制重置棋子狀態 (Reset State) ---
-        // 在移動前，確保棋子是「活著」的狀態 (防止它繼承了之前的死亡動畫屬性)
+
+        // 強制重置攻擊者的狀態 (以防萬一它身上有殘留動畫)
+        // 這一步非常重要！確保它是「滿血」狀態
         piece.visible = true;
         piece.scale.set(1, 1, 1);
-        piece.rotation.set(0, 0, 0); 
-        // 如果是騎士，要保持原本的 Y 軸旋轉
-        if (type.toLowerCase() === 'n') {
-            piece.rotation.y = (type === 'N') ? Math.PI/2 : -Math.PI/2;
-        }
+        // 修正：不要重置 rotation.y，因為騎士的方向要保留
+        piece.rotation.x = 0;
+        piece.rotation.z = 0;
+        piece.position.y = 0;
 
-        // 執行移動動畫
+        // 6. 執行移動動畫
         await this.animator.movePiece(piece, targetPos, type);
-        
-        // --- 修正 5: 動畫結束後的最終校正 ---
-        // 確保位置絕對精準，不會因為動畫誤差而慢慢飄移
+
+        // 7. 動畫結束後的最終校正
         if (piece) {
             piece.position.copy(targetPos);
             piece.position.y = 0;
