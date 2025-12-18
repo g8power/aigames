@@ -71,14 +71,22 @@ export class Game {
     }
 
     async executeMove(from, to) {
-        // 邏輯移動
+        // --- 修正重點：立刻清空選取狀態 ---
+        // 這行非常重要！如果不清空，這顆棋子的「幽靈選取狀態」會殘留到下一回合
+        this.selectedIdx = -1;
+        this.validMoves = [];
+        this.visual.updateHighlights(-1, []); // 同步清除畫面上的黃色框框
+        // -------------------------------
+
+        // 1. 執行邏輯移動
         const result = this.logic.makeMove(from, to);
         
-        // 視覺動畫 (等待動畫完成)
-        this.visual.updateHighlights(-1, []);
+        // 2. 執行視覺動畫
+        // 注意：這裡我們已經清空了 selectedIdx，所以就算動畫跑很久，
+        // 玩家亂點也不會觸發「基於上一次選取」的移動邏輯
         await this.visual.performMove(from, to, this.logic.board, result.captured);
 
-        // 檢查勝負
+        // 3. 檢查勝負
         if (this.logic.checkWin()) {
             this.updateStatus(this.logic.turn === 'w' ? "黑方獲勝!" : "白方獲勝!");
             alert("遊戲結束");
@@ -87,10 +95,9 @@ export class Game {
 
         this.updateStatus(this.logic.turn === 'w' ? "白方思考中" : "AI 思考中...");
 
-        // AI 回合
+        // 4. AI 回合
         if (this.logic.turn === 'b') {
             this.uiLoading.style.display = 'block';
-            // 延遲一點以免動畫還沒跑完就卡住
             setTimeout(() => this.aiTurn(), 100);
         }
     }
