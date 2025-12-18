@@ -531,18 +531,40 @@
         if(gameOver || turn === 'b' || selectedSquare === -1) return;
         
         let rect = boardEl.getBoundingClientRect();
-        let x = Math.floor((e.clientX - rect.left - 25 + 25) / 50); // -25 offset + 25 tolerance
-        let y = Math.floor((e.clientY - rect.top - 25 + 25) / 50);
         
+        // --- 修正重點開始 ---
+        // 我們不再用固定的 50px 來算，而是根據當前棋盤實際在螢幕上的寬高來算
+        // 這樣無論手機縮放成多小，座標比例都會是對的
+        let cellWidth = rect.width / 9;
+        let cellHeight = rect.height / 10;
+
+        let x = Math.floor((e.clientX - rect.left) / cellWidth);
+        let y = Math.floor((e.clientY - rect.top) / cellHeight);
+        // --- 修正重點結束 ---
+        
+        // 邊界檢查 (防止點到邊框外一點點導致報錯)
         if(x >= 0 && x < 9 && y >= 0 && y < 10) {
             let target = y * 9 + x;
-            if(legalMoves.includes(target)) {
+            
+            // 檢查是否為合法的移動位置
+            let isLegal = false;
+            for(let m of legalMoves) {
+                if(m.to === target) {
+                    isLegal = true;
+                    break;
+                }
+            }
+
+            if(isLegal) {
                 makeMove(selectedSquare, target);
             } else {
-                // Deselect
-                selectedSquare = -1;
-                legalMoves = [];
-                renderPieces();
+                // 如果點的不是綠點，才取消選取
+                // 這裡加一個判斷：如果你點的是原本選中的棋子，就不做任何事(不取消)
+                if(target !== selectedSquare) {
+                    selectedSquare = -1;
+                    legalMoves = [];
+                    renderPieces();
+                }
             }
         }
     }
