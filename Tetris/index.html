@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>緊湊版手機俄羅斯方塊</title>
+    <title>俄羅斯方塊(長按移動版)</title>
     <style>
         :root {
             --bg-color: #1a1a24;
@@ -21,21 +21,21 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center; /* 垂直置中 */
+            justify-content: center;
             height: 100vh;
             margin: 0;
             overflow: hidden;
-            touch-action: none;
+            touch-action: none; /* 禁止瀏覽器預設觸控行為 */
         }
 
-        /* 主容器：採用橫向排列 (Flex Row) */
+        /* 主容器：採用橫向排列 */
         #main-container {
             display: flex;
             flex-direction: row;
             align-items: flex-start;
             justify-content: center;
             gap: 10px;
-            margin-bottom: 15px; /* 與按鈕的距離 */
+            margin-bottom: 10px;
         }
 
         /* 遊戲畫布容器 */
@@ -50,20 +50,18 @@
         canvas#tetris {
             display: block;
             background: #111;
-            /* 保持邏輯解析度，但透過 CSS 稍微縮小顯示尺寸以適應小手機 */
-            width: 200px;  /* 原本 240px，縮小至 200px */
+            width: 200px;  
             height: auto;
         }
 
-        /* 右側資訊欄容器 */
+        /* 右側資訊欄 */
         #side-panel {
             display: flex;
             flex-direction: column;
             gap: 10px;
-            width: 85px; /* 固定寬度 */
+            width: 85px;
         }
 
-        /* 下一個方塊面板 */
         .next-panel {
             background: var(--panel-bg);
             padding: 5px;
@@ -81,11 +79,10 @@
         #next-tetris {
             background: #000;
             border: 1px solid #333;
-            width: 60px; /* 縮小預覽圖 */
+            width: 60px;
             height: 60px;
         }
 
-        /* 數據面板 */
         .stats-panel {
             background: var(--panel-bg);
             padding: 8px;
@@ -111,27 +108,28 @@
             display: block;
         }
 
-        /* 手機虛擬按鍵區域 - 縮小版 */
+        /* 按鍵區域 */
         #mobile-controls {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
             grid-template-rows: 1fr 1fr;
-            gap: 8px; /* 間距縮小 */
-            width: 260px; /* 總寬度縮小 */
-            height: 110px; /* 總高度縮小 */
+            gap: 8px;
+            width: 260px;
+            height: 110px;
         }
 
         .control-btn {
             background: linear-gradient(145deg, var(--btn-color), #2a2a35);
             border: 1px solid #444;
-            border-radius: 8px; /* 圓角縮小 */
+            border-radius: 8px;
             color: white;
-            font-size: 20px; /* 字體縮小 */
+            font-size: 20px;
             display: flex;
             align-items: center;
             justify-content: center;
             user-select: none;
             cursor: pointer;
+            -webkit-tap-highlight-color: transparent; /* 移除點擊高亮 */
             box-shadow: 1px 1px 3px rgba(0,0,0,0.5),
                         inset 1px 1px 1px rgba(255,255,255,0.1);
         }
@@ -149,7 +147,6 @@
         .spacer { grid-column: 1; grid-row: 1; visibility: hidden;}
         .spacer2 { grid-column: 3; grid-row: 1; visibility: hidden;}
 
-        /* Game Over 覆蓋層 */
         #game-over {
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -177,10 +174,8 @@
 <body>
 
     <div id="main-container">
-        
         <div id="game-wrapper">
             <canvas id="tetris" width="240" height="400"></canvas>
-            
             <div id="game-over">
                 <h2>GAME OVER</h2>
                 <p>得分: <span id="final-score">0</span></p>
@@ -240,6 +235,9 @@
         let rowsToAnimate = [];
 
         let nextPieceMatrix = null;
+        
+        // 用於長按控制的計時器
+        let navInterval = null;
 
         const colors = [
             null,
@@ -335,7 +333,7 @@
         }
 
         function drawNext() {
-            nextContext.fillStyle = '#111'; // 小畫布背景色
+            nextContext.fillStyle = '#111';
             nextContext.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
             if (nextPieceMatrix) {
                 const offsetX = (4 - nextPieceMatrix[0].length) / 2;
@@ -565,6 +563,8 @@
             level: 1,
         };
 
+        // --- 輸入控制邏輯更新 ---
+
         document.addEventListener('keydown', event => {
             if (isGameOver || isAnimating) return;
             if (event.keyCode === 37) playerMove(-1);
@@ -574,22 +574,79 @@
             else if (event.keyCode === 87 || event.keyCode === 38) playerRotate(1);
         });
 
-        function bindTouch(id, action) {
-            const btn = document.getElementById(id);
-            btn.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                if (!isGameOver && !isAnimating) action();
-            }, {passive: false});
-            btn.addEventListener('mousedown', (e) => {
-                 if (!isGameOver && !isAnimating) action();
-            });
+        // 停止重複動作
+        function stopNav() {
+            if (navInterval) {
+                clearInterval(navInterval);
+                navInterval = null;
+            }
         }
 
-        bindTouch('btn-left', () => playerMove(-1));
-        bindTouch('btn-right', () => playerMove(1));
-        bindTouch('btn-down', () => playerDrop());
-        bindTouch('btn-up', () => playerRotate(1));
+        // 開始重複動作 (支援長按)
+        // intervalTime: 重複執行的間隔時間 (毫秒)
+        function startNav(action, intervalTime) {
+            if (isGameOver || isAnimating) return;
+            
+            stopNav(); // 先清除可能存在的舊計時器
+            action();  // 立即執行一次
 
+            // 設定計時器進行重複執行
+            navInterval = setInterval(() => {
+                if (isGameOver || isAnimating) {
+                    stopNav();
+                    return;
+                }
+                action();
+            }, intervalTime);
+        }
+
+        // 綁定長按功能的輔助函數
+        function bindLongPress(id, action, intervalTime = 100) {
+            const btn = document.getElementById(id);
+            
+            // 手指按下 / 滑鼠按下 -> 開始重複
+            const startHandler = (e) => {
+                e.preventDefault(); // 防止選取文字或縮放
+                startNav(action, intervalTime);
+            };
+
+            // 手指放開 / 滑鼠放開 / 滑鼠移出 -> 停止
+            const endHandler = (e) => {
+                if(e.type !== 'mouseup') e.preventDefault(); 
+                stopNav();
+            };
+
+            btn.addEventListener('touchstart', startHandler, {passive: false});
+            btn.addEventListener('mousedown', startHandler);
+
+            btn.addEventListener('touchend', endHandler);
+            btn.addEventListener('mouseup', endHandler);
+            btn.addEventListener('mouseleave', endHandler);
+        }
+
+        // 綁定單次點擊 (用於旋轉)
+        function bindClick(id, action) {
+            const btn = document.getElementById(id);
+            const handler = (e) => {
+                e.preventDefault();
+                if (!isGameOver && !isAnimating) action();
+            };
+            btn.addEventListener('touchstart', handler, {passive: false});
+            btn.addEventListener('mousedown', handler);
+        }
+
+        // 設定按鈕行為
+        // 左右移動：間隔 100ms
+        bindLongPress('btn-left', () => playerMove(-1), 100);
+        bindLongPress('btn-right', () => playerMove(1), 100);
+        
+        // 向下加速：間隔 50ms (比左右移動更快)
+        bindLongPress('btn-down', () => playerDrop(), 50);
+
+        // 旋轉：維持單次點擊 (避免轉過頭)
+        bindClick('btn-up', () => playerRotate(1));
+
+        // 啟動遊戲
         playerReset();
         updateUI();
         update();
