@@ -97,16 +97,45 @@ export class VisualBoard {
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
 
-        window.addEventListener('click', (e) => {
-            this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-            this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-            this.raycaster.setFromCamera(this.mouse, this.camera);
-            const intersects = this.raycaster.intersectObjects(this.squares);
-            if (intersects.length > 0) {
-                this.onClickCallback(intersects[0].object.userData.index);
-            }
+        // --- 1. 電腦版滑鼠點擊 ---
+        this.renderer.domElement.addEventListener('click', (e) => {
+            // 防止點擊到 UI 層時觸發 (如果有穿透問題)
+            e.preventDefault();
+            this.checkIntersection(e.clientX, e.clientY);
         });
 
+        // --- 2. 手機版觸控 (區分點擊與拖曳) ---
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        this.renderer.domElement.addEventListener('touchstart', (e) => {
+            // 記錄手指按下的位置
+            if (e.touches.length > 0) {
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+            }
+        }, { passive: false });
+
+        this.renderer.domElement.addEventListener('touchend', (e) => {
+            // 記錄手指放開的位置
+            if (e.changedTouches.length > 0) {
+                const touchEndX = e.changedTouches[0].clientX;
+                const touchEndY = e.changedTouches[0].clientY;
+
+                // 計算移動距離
+                const dx = touchEndX - touchStartX;
+                const dy = touchEndY - touchStartY;
+                
+                // 如果移動距離小於 10px，視為「點擊」；否則視為「旋轉鏡頭」
+                if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+                    // 這是點擊
+                    // e.preventDefault(); // 視情況開啟，避免觸發多餘的 click
+                    this.checkIntersection(touchEndX, touchEndY);
+                }
+            }
+        }, { passive: false });
+
+        // --- 視窗縮放處理 ---
         window.addEventListener('resize', () => {
             this.camera.aspect = window.innerWidth / window.innerHeight;
             this.camera.updateProjectionMatrix();
@@ -114,6 +143,26 @@ export class VisualBoard {
         });
 
         this.animate();
+    }
+
+    // 新增這個輔助函式來處理座標轉換與射線檢測
+    checkIntersection(clientX, clientY) {
+        // 將螢幕座標轉換為 -1 到 +1 的標準化設備座標 (NDC)
+        this.mouse.x = (clientX / window.innerWidth) * 2 - 1;
+        this.mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+
+        this.raycaster.setFromCamera(this.mouse, this.camera);
+
+        // 檢測是否點到格子 (使用遞迴檢測 true 以確保捕捉到子物件)
+        const intersects = this.raycaster.intersectObjects(this.squares, false); // 這裡 squares 應該是 Mesh 陣列
+
+        if (intersects.length > 0) {
+            // 找到最前面的物件，讀取其 index
+            const index = intersects[0].object.userData.index;
+            if (index !== undefined) {
+                this.onClickCallback(index);
+            }
+        }
     }
 
     animate() {
