@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTML5 AI 中國象棋</title>
+    <style>
+        body {
+            font-family: "Microsoft JhengHei", sans-serif;
+            background-color: #f0e4d0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+            user-select: none;
+        }
+        h1 { color: #5d4037; margin-bottom: 10px; }
+        .controls {
+            margin-bottom: 15px;
+            background: #fff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        select, button {
+            padding: 5px 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #status {
+            font-weight: bold;
+            color: #d32f2f;
+            margin-left: 10px;
+        }
+        .board {
+            width: 450px;
+            height: 500px;
+            background-color: #eecfa1;
+            border: 5px solid #8d6e63;
+            position: relative;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            grid-template-rows: repeat(10, 1fr);
+        }
+        /* Grid Lines */
+        .grid-line {
+            position: absolute;
+            background-color: #5d4037;
+            z-index: 0;
+        }
+        /* River */
+        .river {
+            position: absolute;
+            top: 200px; /* Between row 4 and 5 (0-indexed 4, 50px*4) */
+            left: 5px;
+            width: 440px;
+            height: 48px; /* Slightly less than 50 to leave gap */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            color: #5d4037;
+            z-index: 1;
+        }
+        /* Palace Lines */
+        .palace-line {
+            position: absolute;
+            background-color: #5d4037;
+            width: 2px;
+            transform-origin: top left;
+            z-index: 0;
+        }
+        
+        .piece {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 28px;
+            font-weight: bold;
+            position: absolute;
+            cursor: pointer;
+            box-shadow: 2px 2px 4px rgba(0,0,0,0.4);
+            z-index: 10;
+            transition: transform 0.2s, top 0.2s, left 0.2s;
+            background: #fdf5e6;
+            /* Border inside simulation */
+            border: 2px solid; 
+        }
+        .piece.red { color: #d32f2f; border-color: #d32f2f; }
+        .piece.black { color: #212121; border-color: #212121; }
+        .piece.selected {
+            background-color: #81d4fa;
+            transform: scale(1.15);
+            z-index: 20;
+        }
+        .dot {
+            width: 12px;
+            height: 12px;
+            background-color: rgba(0, 200, 0, 0.7);
+            border-radius: 50%;
+            position: absolute;
+            z-index: 5;
+            transform: translate(-50%, -50%);
+            pointer-events: none; /* Click through to grid */
+        }
+        /* Clickable grid layer */
+        .click-layer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+        }
+        .loading {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>HTML AI 中國象棋</h1>
+    
+    <div class="controls">
+        <label>難度: 
+            <select id="difficulty">
+                <option value="1">簡單 (新手)</option>
+                <option value="2" selected>普通 (進階)</option>
+                <option value="3">困難 (大師)</option>
+            </select>
+        </label>
+        <button onclick="resetGame()">重新開始</button>
+        <span id="status">紅方走棋</span>
+    </div>
+
+    <div class="board" id="board">
+        <div class="river">楚 河 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 漢 界</div>
+        <div class="click-layer" onclick="handleBoardClick(event)"></div>
+    </div>
+    
+    <div id="loading" class="loading">電腦思考中...</div>
+
+<script>
+    // --- Configuration ---
+    const BOARD_WIDTH = 9;
+    const BOARD_HEIGHT = 10;
+    const SQUARE_SIZE = 50;
+    const START_FEN = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
+
+    // Piece Values for AI
+    const PIECE_VAL = {
+        'k': 10000, 'a': 20, 'b': 20, 'n': 40, 'r': 90, 'c': 45, 'p': 10,
+        'K': 10000, 'A': 20, 'B': 20, 'N': 40, 'R': 90, 'C': 45, 'P': 10
+    };
+    
+    // Board representation: 1D array of size 90 (0-89). 
+    // y * 9 + x. Top-left is 0.
+    let board = new Array(90).fill(null);
+    let turn = 'w'; // 'w' (Red) or 'b' (Black)
+    let selectedSquare = -1;
+    let legalMoves = [];
+    let gameOver = false;
+    let aiWorker = null; // Simulating threading via timeouts
+
+    // DOM Elements
+    const boardEl = document.getElementById('board');
+    const statusEl = document.getElementById('status');
+    const loadingEl = document.getElementById('loading');
+    
+    // --- Initialization ---
+    function initBoardUI() {
+        // Draw Horizontal Lines
+        for(let i=0; i<10; i++) {
+            let line = document.createElement('div');
+            line.className = 'grid-line';
+            line.style.width = '400px';
+            line.style.height = '1px';
+            line.style.left = '25px';
+            line.style.top = (25 + i * 50) + 'px';
+            boardEl.appendChild(line);
+        }
+        // Draw Vertical Lines (Split for river)
+        for(let i=0; i<9; i++) {
+            // Top half
+            let line1 = document.createElement('div');
+            line1.className = 'grid-line';
+            line1.style.width = '1px';
+            line1.style.height = '200px';
+            line1.style.left = (25 + i * 50) + 'px';
+            line1.style.top = '25px';
+            boardEl.appendChild(line1);
+            
+            // Bottom half
+            let line2 = document.createElement('div');
+            line2.className = 'grid-line';
+            line2.style.width = '1px';
+            line2.style.height = '200px';
+            line2.style.left = (25 + i * 50) + 'px';
+            line2.style.top = '275px';
+            boardEl.appendChild(line2);
+
+            // Side lines connect through river
+            if(i === 0 || i === 8) {
+                let riverLine = document.createElement('div');
+                riverLine.className = 'grid-line';
+                riverLine.style.width = '1px';
+                riverLine.style.height = '50px';
+                riverLine.style.left = (25 + i * 50) + 'px';
+                riverLine.style.top = '225px';
+                boardEl.appendChild(riverLine);
+            }
+        }
+        // Palace Diagonals
+        const drawDiag = (x1, y1, x2, y2) => {
+            let line = document.createElement('div');
+            line.className = 'palace-line';
+            let length = Math.sqrt(Math.pow((x2-x1)*50, 2) + Math.pow((y2-y1)*50, 2));
+            line.style.width = length + 'px';
+            line.style.left = (25 + x1 * 50) + 'px';
+            line.style.top = (25 + y1 * 50) + 'px';
+            let angle = Math.atan2(y2-y1, x2-x1) * 180 / Math.PI;
+            line.style.transform = `rotate(${angle}deg)`;
+            boardEl.appendChild(line);
+        }
+        // Top Palace
+        drawDiag(3,0, 5,2); drawDiag(5,0, 3,2);
+        // Bottom Palace
+        drawDiag(3,7, 5,9); drawDiag(5,7, 3,9);
+    }
+
+    function fenToBoard(fen) {
+        board.fill(null);
+        let parts = fen.split(' ');
+        let rows = parts[0].split('/');
+        for(let r=0; r<10; r++) {
+            let c = 0;
+            for(let char of rows[r]) {
+                if(!isNaN(char)) {
+                    c += parseInt(char);
+                } else {
+                    let color = (char === char.toUpperCase()) ? 'w' : 'b';
+                    board[r*9 + c] = { type: char.toLowerCase(), color: color, char: char };
+                    c++;
+                }
+            }
+        }
+        turn = parts[1] || 'w';
+    }
+
+    function renderPieces() {
+        // Remove old pieces and dots
+        document.querySelectorAll('.piece, .dot').forEach(e => e.remove());
+        
+        for(let i=0; i<90; i++) {
+            if(board[i]) {
+                let p = board[i];
+                let div = document.createElement('div');
+                div.className = `piece ${p.color === 'w' ? 'red' : 'black'}`;
+                div.innerText = getPieceChar(p.char);
+                let x = (i % 9) * 50;
+                let y = Math.floor(i / 9) * 50;
+                div.style.left = (x + 3) + 'px'; // +3 for centering correction
+                div.style.top = (y + 3) + 'px';
+                div.dataset.idx = i;
+                div.onclick = (e) => {
+                    e.stopPropagation();
+                    handlePieceClick(i);
+                };
+                if(i === selectedSquare) div.classList.add('selected');
+                boardEl.appendChild(div);
+            }
+        }
+        
+        // Render legal moves dots
+        if(selectedSquare !== -1) {
+            legalMoves.forEach(move => {
+                let div = document.createElement('div');
+                div.className = 'dot';
+                let x = (move % 9) * 50 + 25;
+                let y = Math.floor(move / 9) * 50 + 25;
+                div.style.left = x + 'px';
+                div.style.top = y + 'px';
+                boardEl.appendChild(div);
+            });
+        }
+        
+        statusEl.innerText = gameOver ? (turn === 'w' ? "黑方勝!" : "紅方勝!") : (turn === 'w' ? "輪到紅方" : "輪到黑方");
+    }
+
+    function getPieceChar(char) {
+        const map = {
+            'K': '帥', 'A': '仕', 'B': '相', 'N': '傌', 'R': '俥', 'C': '炮', 'P': '兵',
+            'k': '將', 'a': '士', 'b': '象', 'n': '馬', 'r': '車', 'c': '包', 'p': '卒'
+        };
+        return map[char];
+    }
+
+    // --- Game Logic ---
+
+    function getLegalMoves(pos, side) {
+        let moves = [];
+        for(let i=0; i<90; i++) {
+            if(board[i] && board[i].color === side) {
+                let pieceMoves = generatePseudoLegalMoves(i, board[i].type, side);
+                // Filter moves that leave King in check? 
+                // Simplified: We verify later or allow engine to prune bad moves. 
+                // For UI, we simply show pseudo-legal but do a basic check test if wanted.
+                // For simplicity in this single-file, we show pseudo-legal. 
+                // However, user can't make move that leaves king under attack.
+                pieceMoves.forEach(to => {
+                    if(!isKingCheckAfterMove(i, to, side)) {
+                        moves.push({from: i, to: to});
+                    }
+                });
+            }
+        }
+        return moves;
+    }
+
+    function generatePseudoLegalMoves(idx, type, side) {
+        let moves = [];
+        let x = idx % 9;
+        let y = Math.floor(idx / 9);
+        
+        const add = (tx, ty) => {
+            if(tx>=0 && tx<9 && ty>=0 && ty<10) {
+                let target = ty*9 + tx;
+                if(!board[target] || board[target].color !== side) {
+                    moves.push(target);
+                }
+            }
+        };
+
+        const addLine = (dx, dy) => {
+            let tx = x + dx, ty = y + dy;
+            while(tx>=0 && tx<9 && ty>=0 && ty<10) {
+                let target = ty*9 + tx;
+                if(!board[target]) {
+                    moves.push(target);
+                } else {
+                    if(board[target].color !== side) moves.push(target);
+                    break;
+                }
+                tx += dx; ty += dy;
+            }
+        };
+
+        const addCannon = (dx, dy) => {
+            let tx = x + dx, ty = y + dy;
+            let jump = false;
+            while(tx>=0 && tx<9 && ty>=0 && ty<10) {
+                let target = ty*9 + tx;
+                if(!jump) {
+                    if(!board[target]) moves.push(target);
+                    else jump = true;
+                } else {
+                    if(board[target]) {
+                        if(board[target].color !== side) moves.push(target);
+                        break;
+                    }
+                }
+                tx += dx; ty += dy;
+            }
+        };
+
+        switch(type) {
+            case 'k': // King/General
+                [[0,1], [0,-1], [1,0], [-1,0]].forEach(([dx, dy]) => {
+                    let tx = x+dx, ty = y+dy;
+                    if(tx>=3 && tx<=5 && ((side==='w' && ty>=7 && ty<=9) || (side==='b' && ty>=0 && ty<=2))) {
+                        add(tx, ty);
+                    }
+                });
+                // Flying General rule logic is complex to gen here, usually checked in "isCheck"
+                break;
+            case 'a': // Advisor
+                [[1,1], [1,-1], [-1,1], [-1,-1]].forEach(([dx, dy]) => {
+                    let tx = x+dx, ty = y+dy;
+                    if(tx>=3 && tx<=5 && ((side==='w' && ty>=7 && ty<=9) || (side==='b' && ty>=0 && ty<=2))) {
+                        add(tx, ty);
+                    }
+                });
+                break;
+            case 'b': // Elephant
+                [[2,2], [2,-2], [-2,2], [-2,-2]].forEach(([dx, dy]) => {
+                    let tx = x+dx, ty = y+dy;
+                    let eyeX = x + dx/2, eyeY = y + dy/2; // Elephant eye
+                    if(tx>=0 && tx<9 && ((side==='w' && ty>=5) || (side==='b' && ty<=4))) {
+                        if(!board[eyeY*9 + eyeX]) add(tx, ty);
+                    }
+                });
+                break;
+            case 'n': // Horse
+                [[1,2], [1,-2], [-1,2], [-1,-2], [2,1], [2,-1], [-2,1], [-2,-1]].forEach(([dx, dy]) => {
+                    let tx = x+dx, ty = y+dy;
+                    let legX = x + (Math.abs(dx)===2 ? dx/2 : 0);
+                    let legY = y + (Math.abs(dy)===2 ? dy/2 : 0);
+                    if(tx>=0 && tx<9 && ty>=0 && ty<10) {
+                        if(!board[legY*9 + legX]) add(tx, ty);
+                    }
+                });
+                break;
+            case 'r': // Chariot
+                addLine(0, 1); addLine(0, -1); addLine(1, 0); addLine(-1, 0);
+                break;
+            case 'c': // Cannon
+                addCannon(0, 1); addCannon(0, -1); addCannon(1, 0); addCannon(-1, 0);
+                break;
+            case 'p': // Pawn
+                let dir = (side === 'w') ? -1 : 1;
+                let crossedRiver = (side === 'w') ? (y < 5) : (y > 4);
+                add(x, y+dir);
+                if(crossedRiver) {
+                    add(x+1, y); add(x-1, y);
+                }
+                break;
+        }
+        return moves;
+    }
+
+    function isKingCheckAfterMove(from, to, side) {
+        // Temporarily move
+        let savedTo = board[to];
+        let savedFrom = board[from];
+        board[to] = board[from];
+        board[from] = null;
+        
+        let kingIdx = -1;
+        for(let i=0; i<90; i++) {
+            if(board[i] && board[i].type === 'k' && board[i].color === side) {
+                kingIdx = i;
+                break;
+            }
+        }
+        
+        let inCheck = isAttacked(kingIdx, side);
+        
+        // Check "Flying General" (kings facing each other without obstruction)
+        if(!inCheck) {
+            let otherKing = -1;
+            let opp = side==='w'?'b':'w';
+            for(let i=0; i<90; i++) {
+                if(board[i] && board[i].type === 'k' && board[i].color === opp) {
+                    otherKing = i; break;
+                }
+            }
+            if(kingIdx%9 === otherKing%9) { // Same column
+                let min = Math.min(kingIdx, otherKing);
+                let max = Math.max(kingIdx, otherKing);
+                let obstruction = false;
+                for(let k=min+9; k<max; k+=9) {
+                    if(board[k]) { obstruction = true; break; }
+                }
+                if(!obstruction) inCheck = true;
+            }
+        }
+
+        // Undo move
+        board[from] = savedFrom;
+        board[to] = savedTo;
+        
+        return inCheck;
+    }
+
+    function isAttacked(idx, side) {
+        // Simplified check: see if any opponent piece can move to idx
+        let opp = (side === 'w') ? 'b' : 'w';
+        for(let i=0; i<90; i++) {
+            if(board[i] && board[i].color === opp) {
+                let moves = generatePseudoLegalMoves(i, board[i].type, opp);
+                if(moves.includes(idx)) return true;
+            }
+        }
+        return false;
+    }
+
+    function makeMove(from, to) {
+        board[to] = board[from];
+        board[from] = null;
+        turn = (turn === 'w') ? 'b' : 'w';
+        selectedSquare = -1;
+        legalMoves = [];
+        renderPieces();
+
+        // Check for Game Over (Win)
+        let kingFound = false;
+        let opp = turn;
+        for(let i=0; i<90; i++) if(board[i] && board[i].type === 'k' && board[i].color === opp) kingFound = true;
+        
+        if(!kingFound) {
+            gameOver = true;
+            alert((turn === 'w' ? "紅方" : "黑方") + " 贏了!");
+            return;
+        }
+
+        if(turn === 'b' && !gameOver) {
+            setTimeout(aiMove, 100);
+        }
+    }
+
+    // --- UI Interactions ---
+
+    function handlePieceClick(idx) {
+        if(gameOver) return;
+        if(turn === 'b') return; // AI's turn
+
+        if(board[idx].color === 'w') {
+            selectedSquare = idx;
+            // Get valid moves for this piece
+            let rawMoves = generatePseudoLegalMoves(idx, board[idx].type, 'w');
+            legalMoves = rawMoves.filter(to => !isKingCheckAfterMove(idx, to, 'w'));
+            renderPieces();
+        } else if(selectedSquare !== -1 && legalMoves.includes(idx)) {
+            // Capture
+            makeMove(selectedSquare, idx);
+        }
+    }
+
+    function handleBoardClick(e) {
+        if(gameOver || turn === 'b' || selectedSquare === -1) return;
+        
+        let rect = boardEl.getBoundingClientRect();
+        let x = Math.floor((e.clientX - rect.left - 25 + 25) / 50); // -25 offset + 25 tolerance
+        let y = Math.floor((e.clientY - rect.top - 25 + 25) / 50);
+        
+        if(x >= 0 && x < 9 && y >= 0 && y < 10) {
+            let target = y * 9 + x;
+            if(legalMoves.includes(target)) {
+                makeMove(selectedSquare, target);
+            } else {
+                // Deselect
+                selectedSquare = -1;
+                legalMoves = [];
+                renderPieces();
+            }
+        }
+    }
+
+    function resetGame() {
+        fenToBoard(START_FEN);
+        gameOver = false;
+        renderPieces();
+    }
+
+    // --- AI Engine ---
+
+    function aiMove() {
+        loadingEl.style.display = 'block';
+        
+        // Use timeout to allow UI to render "Thinking..."
+        setTimeout(() => {
+            let depth = parseInt(document.getElementById('difficulty').value);
+            // Difficulty Mapping:
+            // 1: Easy (Depth 2, high randomness)
+            // 2: Medium (Depth 3)
+            // 3: Hard (Depth 4)
+            let searchDepth = (depth === 1) ? 2 : (depth === 2 ? 3 : 4);
+            
+            let bestMove = minimaxRoot(searchDepth, true);
+            
+            loadingEl.style.display = 'none';
+            if(bestMove) {
+                makeMove(bestMove.from, bestMove.to);
+            } else {
+                alert("黑方無路可走，紅方勝!");
+                gameOver = true;
+            }
+        }, 50);
+    }
+
+    function evaluate() {
+        let score = 0;
+        for(let i=0; i<90; i++) {
+            if(board[i]) {
+                let val = PIECE_VAL[board[i].char];
+                // Position bonuses (simplified)
+                if(board[i].type === 'p') {
+                    // Advance pawns bonus
+                    let y = Math.floor(i/9);
+                    if(board[i].color === 'b' && y > 4) val += 20; // Black pawn crossed river
+                    if(board[i].color === 'w' && y < 5) val += 20;
+                }
+                
+                if(board[i].color === 'b') score += val;
+                else score -= val;
+            }
+        }
+        return score;
+    }
+
+    function minimaxRoot(depth, isMaximizing) {
+        let newMoves = getAllMoves('b'); // Black AI
+        let bestMove = null;
+        let bestValue = -Infinity;
+        
+        // Randomize move order for variety
+        newMoves.sort(() => Math.random() - 0.5);
+
+        for(let i = 0; i < newMoves.length; i++) {
+            let move = newMoves[i];
+            let captured = board[move.to];
+            
+            // Do move
+            board[move.to] = board[move.from];
+            board[move.from] = null;
+            
+            let value = minimax(depth - 1, -Infinity, Infinity, !isMaximizing);
+            
+            // Undo move
+            board[move.from] = board[move.to];
+            board[move.to] = captured;
+            
+            if(value >= bestValue) {
+                bestValue = value;
+                bestMove = move;
+            }
+        }
+        return bestMove;
+    }
+
+    function minimax(depth, alpha, beta, isMaximizing) {
+        if (depth === 0) {
+            return evaluate();
+        }
+
+        let side = isMaximizing ? 'b' : 'w';
+        let possibleMoves = getAllMoves(side);
+        
+        if (possibleMoves.length === 0) return isMaximizing ? -100000 : 100000;
+
+        if (isMaximizing) {
+            let bestVal = -Infinity;
+            for (let i = 0; i < possibleMoves.length; i++) {
+                let move = possibleMoves[i];
+                let captured = board[move.to];
+                
+                board[move.to] = board[move.from];
+                board[move.from] = null;
+                
+                // Check if King is eaten (Win condition in tree)
+                if(captured && captured.type === 'k') { 
+                     board[move.from] = board[move.to]; board[move.to] = captured;
+                     return 100000 + depth; 
+                }
+
+                let value = minimax(depth - 1, alpha, beta, false);
+                
+                board[move.from] = board[move.to];
+                board[move.to] = captured;
+                
+                bestVal = Math.max(bestVal, value);
+                alpha = Math.max(alpha, bestVal);
+                if (beta <= alpha) {
+                    break;
+                }
+            }
+            return bestVal;
+        } else {
+            let bestVal = Infinity;
+            for (let i = 0; i < possibleMoves.length; i++) {
+                let move = possibleMoves[i];
+                let captured = board[move.to];
+                
+                board[move.to] = board[move.from];
+                board[move.from] = null;
+                
+                if(captured && captured.type === 'k') {
+                     board[move.from] = board[move.to]; board[move.to] = captured;
+                     return -100000 - depth; 
+                }
+
+                let value = minimax(depth - 1, alpha, beta, true);
+                
+                board[move.from] = board[move.to];
+                board[move.to] = captured;
+                
+                bestVal = Math.min(bestVal, value);
+                beta = Math.min(beta, bestVal);
+                if (beta <= alpha) {
+                    break;
+                }
+            }
+            return bestVal;
+        }
+    }
+
+    function getAllMoves(side) {
+        let allMoves = [];
+        for(let i=0; i<90; i++) {
+            if(board[i] && board[i].color === side) {
+                let moves = generatePseudoLegalMoves(i, board[i].type, side);
+                moves.forEach(to => {
+                    // Basic sanity check: don't move into immediate king capture (check)
+                    // Optimization: In deep search, we allow pseudo moves and penalize king capture heavily
+                    // But for valid gameplay we must check legality slightly
+                    if(!isKingCheckAfterMove(i, to, side)) {
+                        allMoves.push({from: i, to: to});
+                    }
+                });
+            }
+        }
+        return allMoves;
+    }
+
+    // --- 手機版自適應優化 ---
+    function fitToScreen() {
+        const board = document.getElementById('board');
+        const screenWidth = window.innerWidth;
+        const boardWidth = 460; // 棋盤原始寬度 + 邊距緩衝
+        
+        // 如果螢幕比棋盤窄，就進行縮放
+        if (screenWidth < boardWidth) {
+            const scale = (screenWidth - 20) / 450; // 留 20px 邊距
+            board.style.transform = `scale(${scale})`;
+            board.style.transformOrigin = 'top center'; // 從上方置中縮放
+            
+            // 修正縮放後下方留白過多的問題
+            // 原始高度 500px，縮放後實際上只佔了 500 * scale
+            const heightDiff = 500 * (1 - scale);
+            board.style.marginBottom = `-${heightDiff}px`; 
+        } else {
+            board.style.transform = 'none';
+            board.style.marginBottom = '0';
+        }
+    }
+
+    // 監聽視窗改變大小 (旋轉螢幕時觸發)
+    window.addEventListener('resize', fitToScreen);
+
+
+    // Start
+    initBoardUI();
+    fitToScreen();
+    resetGame();
+
+</script>
+</body>
+</html>
