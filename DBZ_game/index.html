@@ -149,7 +149,7 @@
         // 修改：降低貝吉塔出現機率
         // 原本 > 0.45 (55% Vegeta)，現在改為 < 0.15 (15% Vegeta)
         let rand = Math.random();
-        let type = rand < 0.15 ? 'VEGETA' : 'GOKU'; 
+        let type = rand < 0.35 ? 'VEGETA' : 'GOKU'; 
 
         let itemY = height - groundHeight + 20; 
         if (Math.random() > 0.6) itemY -= Math.random() * 200 + 50; 
