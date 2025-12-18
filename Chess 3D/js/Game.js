@@ -41,20 +41,29 @@ export class Game {
     async handleInput(idx) {
         if (this.logic.gameOver || this.logic.turn === 'b') return;
 
-        // 1. 如果點擊了合法移動的位置 -> 移動
-        if (this.validMoves.includes(idx)) {
+        // --- 修正 1: 如果點擊了「自己已經選取的位置」 -> 取消選取 ---
+        // 這能防止「原地移動」的邏輯觸發
+        if (idx === this.selectedIdx) {
+            this.selectedIdx = -1;
+            this.validMoves = [];
+            this.visual.updateHighlights(-1, []);
+            return;
+        }
+
+        // 2. 如果點擊了合法移動的位置 -> 移動
+        if (this.selectedIdx !== -1 && this.validMoves.includes(idx)) {
             await this.executeMove(this.selectedIdx, idx);
             return;
         }
 
-        // 2. 點擊自己的棋子 -> 選取
+        // 3. 點擊自己的棋子 -> 選取
         const char = this.logic.board[idx];
         if (char !== '.' && this.logic.getColor(char) === this.logic.turn) {
             this.selectedIdx = idx;
             this.validMoves = this.logic.getLegalMoves(idx);
             this.visual.updateHighlights(idx, this.validMoves);
         } else {
-            // 3. 點空地 -> 取消
+            // 4. 點空地 -> 取消
             this.selectedIdx = -1;
             this.validMoves = [];
             this.visual.updateHighlights(-1, []);

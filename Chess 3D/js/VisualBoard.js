@@ -119,51 +119,57 @@ export class VisualBoard {
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
 
-        // 手機觸控邏輯變數
-        let touchStartX = 0;
-        let touchStartY = 0;
-        let isDragging = false;
+        // 建立一個變數來阻擋重複觸發
+        let isTouchInteraction = false;
 
-        const handleInputStart = (x, y) => {
-            touchStartX = x;
-            touchStartY = y;
-            isDragging = false;
+        const handleInput = (clientX, clientY, isTouch) => {
+            // 如果是滑鼠點擊，但剛剛才發生過觸控，則忽略這次滑鼠點擊 (防止雙重觸發)
+            if (!isTouch && isTouchInteraction) {
+                isTouchInteraction = false; // 重置旗標
+                return; 
+            }
+            if (isTouch) isTouchInteraction = true;
+
+            this.checkIntersection(clientX, clientY);
         };
 
-        const handleInputEnd = (x, y) => {
-            // 計算移動距離
-            const dx = Math.abs(x - touchStartX);
-            const dy = Math.abs(y - touchStartY);
+        // --- 滑鼠 ---
+        this.renderer.domElement.addEventListener('click', (e) => {
+            handleInput(e.clientX, e.clientY, false);
+        });
 
-            // 如果移動超過 5px，視為旋轉鏡頭，不是點擊
-            if (dx > 5 || dy > 5) return;
+        // --- 觸控 ---
+        let touchStartX = 0, touchStartY = 0;
 
-            // 執行點擊檢測
-            this.checkIntersection(x, y);
-        };
-
-        // 滑鼠事件
-        this.renderer.domElement.addEventListener('mousedown', (e) => handleInputStart(e.clientX, e.clientY));
-        this.renderer.domElement.addEventListener('mouseup', (e) => handleInputEnd(e.clientX, e.clientY));
-
-        // 觸控事件 (重要：passive: false 允許我們控制行為)
         this.renderer.domElement.addEventListener('touchstart', (e) => {
-            if(e.touches.length > 0) handleInputStart(e.touches[0].clientX, e.touches[0].clientY);
+            if(e.touches.length > 0) {
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+            }
         }, { passive: false });
 
         this.renderer.domElement.addEventListener('touchend', (e) => {
             if(e.changedTouches.length > 0) {
-                // e.preventDefault(); // 在某些手機瀏覽器防止雙擊縮放
-                handleInputEnd(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+                // 關鍵：阻止瀏覽器產生額外的 click 事件
+                e.preventDefault(); 
+                
+                const x = e.changedTouches[0].clientX;
+                const y = e.changedTouches[0].clientY;
+                
+                // 防手抖：移動太遠視為旋轉視角
+                if (Math.abs(x - touchStartX) < 10 && Math.abs(y - touchStartY) < 10) {
+                    handleInput(x, y, true);
+                }
             }
         }, { passive: false });
 
+        // ... resize 監聽保持不變 ...
         window.addEventListener('resize', () => {
             this.camera.aspect = window.innerWidth / window.innerHeight;
             this.camera.updateProjectionMatrix();
             this.renderer.setSize(window.innerWidth, window.innerHeight);
         });
-
+        
         this.animate();
     }
 
@@ -237,71 +243,64 @@ export class VisualBoard {
     }
 
     async performMove(from, to, boardState, captured) {
+        // --- 修正 1: 絕對禁止原地移動 (防止自殺 BUG) ---
+        if (from === to) return;
+
         const piece = this.pieces[from];
         const victim = this.pieces[to];
         const type = boardState[to];
 
-        // 1. 防呆：如果來源棋子不見了，強制重繪
         if (!piece) {
             this.spawnPieces(boardState);
             return;
         }
 
-        // 2. 清理來源位置
-        this.pieces[from] = null;
-
-        // 3. 處理吃子邏輯 (替身模式)
+        // --- 修正 2: 替身攻擊 (防止繼承死亡狀態) ---
         if (victim) {
-            // 如果是吃子 (captured = true)
             if (captured) {
-                // A. 建立替身 (Clone)
+                // 建立替身 (Clone)
                 const clone = victim.clone();
                 clone.position.copy(victim.position);
                 clone.rotation.copy(victim.rotation);
                 
-                // B. 確保替身材質也是獨立的 (避免影響其他棋子)
+                // 確保材質獨立
                 clone.traverse((node) => {
                     if (node.isMesh) node.material = node.material.clone();
                 });
                 
                 this.scene.add(clone);
 
-                // C. 立刻刪除真身 (讓位給攻擊者)
+                // 立刻刪除真身 (讓位給攻擊者)
                 this.scene.remove(victim);
-                
-                // D. 對替身播放死亡動畫 (這不會影響到任何人)
+                // 對替身播放死亡動畫
                 this.animator.killPiece(clone);
             } else {
-                // 如果不是吃子 (可能是殘留的幽靈)，直接刪除
+                // 如果不是吃子 (幽靈)，直接刪除
                 this.scene.remove(victim);
             }
-            
-            // 確保陣列位置清空
             this.pieces[to] = null;
         }
 
-        // 4. 更新陣列：攻擊者就位
+        // 更新陣列
         this.pieces[to] = piece;
+        this.pieces[from] = null;
 
-        // 5. 準備移動攻擊者
+        // 計算目標
         const targetPos = this.getCoord(to);
 
-        // 強制重置攻擊者的狀態 (以防萬一它身上有殘留動畫)
-        // 這一步非常重要！確保它是「滿血」狀態
+        // --- 修正 3: 移動前強制重置狀態 ---
         piece.visible = true;
         piece.scale.set(1, 1, 1);
-        // 修正：不要重置 rotation.y，因為騎士的方向要保留
+        piece.position.y = 0;
         piece.rotation.x = 0;
         piece.rotation.z = 0;
-        piece.position.y = 0;
 
-        // 6. 執行移動動畫
+        // 執行移動
         await this.animator.movePiece(piece, targetPos, type);
 
-        // 7. 動畫結束後的最終校正
+        // 最終校正
         if (piece) {
             piece.position.copy(targetPos);
-            piece.position.y = 0;
             piece.scale.set(1, 1, 1);
         }
     }
