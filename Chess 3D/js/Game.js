@@ -12,6 +12,15 @@ export class Game {
         this.uiLoading = document.getElementById('loading');
         
         document.getElementById('resetBtn').addEventListener('click', () => this.reset());
+	// --- 新增：綁定校正按鈕 ---
+        document.getElementById('syncBtn').addEventListener('click', () => {
+            // 這裡不重置邏輯，只重繪畫面
+            this.visual.spawnPieces(this.logic.board);
+            this.visual.updateHighlights(-1, []);
+            this.selectedIdx = -1;
+            this.validMoves = [];
+            console.log('棋盤已校正');
+        });
     }
 
     init() {

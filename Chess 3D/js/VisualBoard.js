@@ -229,6 +229,14 @@ export class VisualBoard {
         const victim = this.pieces[to];
         const type = boardState[to];
 
+        // --- 修正重點：防止幽靈棋子 ---
+        // 如果目的地有東西，但邏輯說「沒吃子」，代表那是殘留的 Bug 模型，直接刪除
+        if (victim && !captured) {
+            this.scene.remove(victim);
+            this.pieces[to] = null;
+        }
+        // ---------------------------
+
         this.pieces[to] = piece;
         this.pieces[from] = null;
 
@@ -236,14 +244,16 @@ export class VisualBoard {
             await this.animator.killPiece(victim);
         }
 
-        // 使用統一座標系統作為目標
         const targetPos = this.getCoord(to);
         
-        await this.animator.movePiece(piece, targetPos, type);
-        
-        // --- 關鍵修正：動畫結束後強制校正位置 ---
-        // 防止 GSAP 動畫有微小誤差導致模型慢慢偏移
-        if(piece) piece.position.copy(targetPos);
+        if (piece) {
+            await this.animator.movePiece(piece, targetPos, type);
+            // 動畫結束後再次強制校正
+            piece.position.copy(targetPos);
+            piece.position.y = 0; // 確保貼地
+            piece.scale.set(1, 1, 1); // 確保大小正常
+            piece.rotation.set(0, piece.rotation.y, 0); // 確保沒有歪倒
+        }
     }
 
     updateHighlights(selected, moves) {
