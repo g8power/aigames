@@ -109,13 +109,13 @@ class GameScene extends Phaser.Scene {
         let mountainScale = desiredMountainHeight / 1536; // 計算縮小倍率 (大約 0.2)
         
         // 這裡我們把 tileSprite 的高度設為螢幕高度，但用定位點控制顯示
-        this.bgMountains = this.add.tileSprite(0, this.groundY, this.scale.width, 1536, 'bg_mountains')
+        this.bgMountains = this.add.tileSprite(0, this.groundY, this.scale.width, desiredMountainHeight, 'bg_mountains')
             .setOrigin(0, 1) // 底部對齊
             .setScrollFactor(0).setDepth(1);
         this.bgMountains.setTileScale(mountainScale); // 縮小紋理
         // 調整顯示區域的高度，讓它不要擋到天空太多
-        this.bgMountains.height = desiredMountainHeight / mountainScale; 
-        this.bgMountains.setDisplaySize(this.scale.width, desiredMountainHeight);
+        //this.bgMountains.height = desiredMountainHeight / mountainScale; 
+        //this.bgMountains.setDisplaySize(this.scale.width, desiredMountainHeight);
 
 
         // --- 3. 地面層 (Ground) ---
