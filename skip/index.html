@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>七龍珠Z：那美剋星激戰 (HD版)</title>
+    <style>
+        body { margin: 0; padding: 0; background: #000; overflow: hidden; touch-action: none; }
+        canvas { display: block; margin: 0 auto; }
+    </style>
+    <script src="phaser.min.js"></script>
+</head>
+<body>
+
+<script>
+class PreloadScene extends Phaser.Scene {
+    constructor() { super('PreloadScene'); }
+    preload() {
+        let progressBar = this.add.graphics();
+        this.load.on('progress', (value) => {
+            progressBar.clear();
+            progressBar.fillStyle(0x40E0D0, 1);
+            progressBar.fillRect(this.cameras.main.width / 2 - 150, this.cameras.main.height / 2 - 15, 300 * value, 30);
+        });
+
+        // 設定圖片路徑
+        this.load.setPath('assets/'); 
+
+        // 1. 背景與地面
+        this.load.image('bg_sky', 'bg_namek_sky.png');
+        this.load.image('bg_mountains', 'bg_namek_mountains.png');
+        this.load.image('tile_ground', 'tile_namek_ground.png');
+        
+        // 2. 物件合圖 (樹 + 座艙)
+        this.load.image('obj_tree', 'obj_ajisa_tree_processed.png');
+
+        this.load.setPath(''); 
+
+        this.makeTempAssets();
+    }
+    create() { this.scene.start('TitleScene'); }
+
+    makeTempAssets() {
+        // 暫時用的龍珠與氣功
+        let graphics = this.make.graphics({x: 0, y: 0, add: false});
+        // 氣功
+        graphics.clear();
+        graphics.fillStyle(0xFFFFFF, 1); graphics.fillCircle(5, 5, 5);
+        graphics.generateTexture('energy_bit', 10, 10);
+        // 龍珠
+        graphics.clear();
+        graphics.fillStyle(0xFFA500, 1); graphics.fillCircle(15, 15, 15);
+        graphics.fillStyle(0xFF0000, 1); graphics.fillCircle(15, 15, 4);
+        graphics.generateTexture('dragonball', 30, 30);
+    }
+}
+
+class TitleScene extends Phaser.Scene {
+    constructor() { super('TitleScene'); }
+    create() {
+        const width = this.scale.width;
+        const height = this.scale.height;
+
+        // 標題背景：縮放天空圖以填滿螢幕
+        if (this.textures.exists('bg_sky')) {
+            let bg = this.add.image(width / 2, height / 2, 'bg_sky');
+            // 計算覆蓋比例 (Cover 模式)
+            let scaleX = width / bg.width;
+            let scaleY = height / bg.height;
+            let scale = Math.max(scaleX, scaleY);
+            bg.setScale(scale);
+        }
+
+        this.add.text(width/2, height/2 - 60, 'PLANET NAMEK', { fontSize: '60px', color: '#FFF', stroke: '#000', strokeThickness: 6, fontStyle: 'bold' }).setOrigin(0.5);
+        this.add.text(width/2, height/2, 'BATTLE', { fontSize: '40px', color: '#FFD700', stroke: '#000', strokeThickness: 4, fontStyle: 'bold' }).setOrigin(0.5);
+        
+        let startBtn = this.add.text(width/2, height/2 + 100, 'START GAME', { fontSize: '32px', backgroundColor: '#008000', padding: {x:30, y:15} })
+            .setOrigin(0.5).setInteractive().on('pointerdown', () => this.scene.start('GameScene'));
+        this.tweens.add({ targets: startBtn, scaleX: 1.1, scaleY: 1.1, duration: 800, yoyo: true, repeat: -1 });
+    }
+}
+
+class GameScene extends Phaser.Scene {
+    constructor() { super('GameScene'); }
+
+    create() {
+        this.scene.launch('UIScene');
+        this.physics.world.setBounds(0, 0, Number.MAX_SAFE_INTEGER, this.scale.height);
+        this.groundY = this.scale.height - 60;
+        
+        // ===============================================
+        //  圖片比例調整核心邏輯 (Scaling Logic)
+        // ===============================================
+
+        // --- 1. 背景層 (Sky) ---
+        // 原圖 1536 高。我們讓它剛好適應螢幕高度。
+        // setTileScale 控制的是「紋理內部的縮放」，setSize 控制的是「顯示範圍」
+        let skyScale = this.scale.height / 1536; 
+        // 為了讓太陽不要太大，我們限制最小縮放為 0.5，最大為 1.0
+        skyScale = Phaser.Math.Clamp(skyScale, 0.5, 1.0);
+
+        this.bgSky = this.add.tileSprite(0, 0, this.scale.width, this.scale.height, 'bg_sky')
+            .setOrigin(0).setScrollFactor(0).setDepth(0);
+        this.bgSky.setTileScale(skyScale);
+
+        // --- 2. 遠景山脈 (Mountains) ---
+        // 原圖 1536 高。我們希望山脈在畫面上看起來大約 300px~400px 高。
+        let desiredMountainHeight = this.scale.height * 0.4; // 佔螢幕 40%
+        let mountainScale = desiredMountainHeight / 1536; // 計算縮小倍率 (大約 0.2)
+        
+        // 這裡我們把 tileSprite 的高度設為螢幕高度，但用定位點控制顯示
+        this.bgMountains = this.add.tileSprite(0, this.groundY, this.scale.width, desiredMountainHeight, 'bg_mountains')
+            .setOrigin(0, 1) // 底部對齊
+            .setScrollFactor(0).setDepth(1);
+        this.bgMountains.setTileScale(mountainScale); // 縮小紋理
+        // 調整顯示區域的高度，讓它不要擋到天空太多
+        //this.bgMountains.height = desiredMountainHeight / mountainScale; 
+        //this.bgMountains.setDisplaySize(this.scale.width, desiredMountainHeight);
+
+
+        // --- 3. 地面層 (Ground) ---
+        // 原圖 2048x2048。非常巨大。必須縮小很多倍，不然只會看到綠色一片。
+        // 我們希望格子看起來大約 128px 寬
+        let groundScale = 128 / 2048; // 約 0.06
+
+        this.ground = this.add.tileSprite(0, this.groundY, this.scale.width, 80, 'tile_ground')
+            .setOrigin(0, 0).setScrollFactor(0).setDepth(10); 
+        this.ground.setTileScale(groundScale); // 應用縮放
+
+        // --- 4. 圖片切割邏輯 (Texture Splitting) ---
+        // 處理 2752x1536 的合圖
+        if (this.textures.exists('obj_tree')) {
+            const texture = this.textures.get('obj_tree');
+            const imgW = 2752;
+            const imgH = 1536;
+            
+            if (!texture.has('tree')) {
+                // 左半邊 = 樹 (寬 1376)
+                texture.add('tree', 0, 0, 0, imgW / 2, imgH);
+                // 右半邊 = 座艙 (寬 1376)
+                texture.add('pod', 0, imgW / 2, 0, imgW / 2, imgH);
+            }
+        }
+
+        // 物理地板
+        this.platforms = this.physics.add.staticGroup();
+        this.platforms.create(this.scale.width/2, this.scale.height - 10, 'tile_ground').setScale(1000, 2).refreshBody().setVisible(false);
+
+        // --- 角色層 ---
+        this.player = this.add.rectangle(200, this.groundY - 50, 40, 80, 0xFFA500).setDepth(20); 
+        this.add.text(180, this.groundY - 100, "GOHAN", {fontSize: '12px', color: '#FFF', stroke: '#000', strokeThickness: 2}).setDepth(20);
+
+        // --- 弗利札 (使用 Pod 切圖) ---
+        let friezaKey = this.textures.exists('obj_tree') ? 'obj_tree' : null;
+        let friezaFrame = friezaKey ? 'pod' : null;
+
+        if (friezaKey) {
+            this.frieza = this.physics.add.image(250, this.groundY - 30, friezaKey, friezaFrame).setDepth(20);
+            
+            // 縮放計算：原圖高 1536 -> 目標高 60
+            let podScale = 60 / 1536; 
+            this.frieza.setScale(podScale);
+            
+            // 碰撞框修正 (因為縮放後，原本的寬度也變了)
+            let width = this.frieza.width; // 1376
+            let height = this.frieza.height; // 1536
+            // 設定一個圓形碰撞框，半徑取寬度的 40%
+            this.frieza.setCircle(width * 0.4, width * 0.1, height * 0.15); 
+        } else {
+            let graphics = this.make.graphics({x: 0, y: 0, add: false});
+            graphics.fillStyle(0xFFFFFF, 1); graphics.fillCircle(20, 20, 20);
+            graphics.generateTexture('temp_pod', 40, 40);
+            this.frieza = this.physics.add.image(250, this.groundY - 30, 'temp_pod').setDepth(20);
+            this.frieza.setCircle(20);
+        }
+
+        this.frieza.setBounce(0.6);
+        this.frieza.setCollideWorldBounds(true);
+        this.physics.world.setBoundsCollision(false, false, false, true);
+        this.physics.add.collider(this.frieza, this.platforms, this.onGroundHit, null, this);
+
+        this.cameras.main.startFollow(this.frieza, true, 0.08, 0.08);
+        this.cameras.main.setFollowOffset(-200, 100);
+
+        this.obstacles = this.physics.add.group(); 
+        this.decorations = this.add.group(); 
+
+        this.isAiming = false;
+        this.gameState = 'IDLE';
+
+        this.graphics = this.add.graphics().setDepth(100);
+        this.input.on('pointerdown', this.startAim, this);
+        this.input.on('pointermove', this.updateAim, this);
+        this.input.on('pointerup', this.shoot, this);
+
+        this.trail = this.add.particles(0, 0, 'energy_bit', {
+            speed: 100, scale: { start: 0.8, end: 0 }, blendMode: 'ADD', lifespan: 300, tint: 0xFF00FF, follow: this.frieza 
+        }).setDepth(19);
+        this.trail.stop();
+    }
+
+    update(time, delta) {
+        this.ground.tilePositionX = this.cameras.main.scrollX / this.ground.tileScaleX; // 修正滾動速度以配合縮放
+        this.bgMountains.tilePositionX = (this.cameras.main.scrollX * 0.2) / this.bgMountains.tileScaleX;
+        
+        this.platforms.getChildren()[0].x = this.frieza.x;
+        this.platforms.getChildren()[0].refreshBody();
+
+        if (this.gameState === 'FLYING') {
+            this.frieza.rotation += this.frieza.body.velocity.x * 0.002;
+            this.generateWorldElements();
+
+            if (this.frieza.body.onFloor()) {
+                this.frieza.setDragX(400); this.frieza.setAngularDrag(400);
+            } else {
+                this.frieza.setDragX(30); this.frieza.setAngularDrag(0);
+            }
+
+            if (Math.abs(this.frieza.body.velocity.x) < 5 && Math.abs(this.frieza.body.velocity.y) < 5 && this.frieza.body.onFloor()) {
+                this.frieza.setVelocity(0);
+                this.trail.stop();
+                this.gameState = 'ENDED';
+                this.scene.get('UIScene').showRestart();
+            }
+
+            let dist = Math.max(0, Math.floor((this.frieza.x - 250) / 10));
+            this.events.emit('updateScore', dist);
+        }
+    }
+
+    generateWorldElements() {
+        let spawnX = this.cameras.main.scrollX + this.scale.width + 100;
+        let lastDeco = this.decorations.getLast(true);
+        let lastObs = this.obstacles.getLast(true);
+        let lastX = 0;
+        if (lastDeco) lastX = Math.max(lastX, lastDeco.x);
+        if (lastObs) lastX = Math.max(lastX, lastObs.x);
+
+        if (spawnX < lastX + 300) return; 
+
+        if (Phaser.Math.Between(0, 100) < 15) { 
+            let rand = Math.random();
+            if (rand < 0.2) {
+                this.spawnObstacle(spawnX);
+            } else {
+                let frameName = (rand < 0.6) ? 'tree' : 'pod'; 
+                this.spawnDecoration(spawnX, frameName);
+            }
+        }
+        
+        this.obstacles.children.each(obs => { if (obs.x < this.cameras.main.scrollX - 200) obs.destroy(); });
+        this.decorations.children.each(dec => { if (dec.x < this.cameras.main.scrollX - 200) dec.destroy(); });
+    }
+
+    spawnObstacle(x) {
+        let yPos = this.groundY - Phaser.Math.Between(50, 200);
+        let obs = this.obstacles.create(x, yPos, 'dragonball');
+        obs.body.allowGravity = false;
+        obs.body.setImmovable(true);
+        obs.type = 'DRAGONBALL';
+        obs.setDepth(20); 
+        this.physics.add.overlap(this.frieza, obs, this.hitObstacle, null, this);
+    }
+
+    spawnDecoration(x, frameName) {
+        if (this.textures.exists('obj_tree')) {
+            let dec = this.add.image(x, this.groundY, 'obj_tree', frameName);
+            this.decorations.add(dec);
+
+            // 原始高度 1536
+            // 目標：樹高 250px, 座艙高 100px
+            let targetHeight = (frameName === 'tree') ? 250 : 100;
+            
+            // 計算縮放比例
+            let scale = targetHeight / 1536;
+            
+            dec.setScale(scale);
+            dec.setOrigin(0.5, 1);
+            dec.setDepth(5); 
+        }
+    }
+
+    startAim(pointer) { if (this.gameState !== 'IDLE') return; this.isAiming = true; }
+    updateAim(pointer) {
+        if (!this.isAiming) return;
+        this.graphics.clear();
+        let worldPoint = pointer.positionToCamera(this.cameras.main);
+        let dx = worldPoint.x - this.frieza.x;
+        let dy = worldPoint.y - this.frieza.y;
+        let angle = Math.atan2(dy, dx);
+        if (dx < 0) angle = -1.5; 
+        const lineLen = 150;
+        this.graphics.lineStyle(4, 0xFF0000, 1);
+        this.graphics.beginPath();
+        this.graphics.moveTo(this.frieza.x, this.frieza.y);
+        this.graphics.lineTo(this.frieza.x + Math.cos(angle) * lineLen, this.frieza.y + Math.sin(angle) * lineLen);
+        this.graphics.strokePath();
+        this.currentAimAngle = angle;
+    }
+    shoot() {
+        if (!this.isAiming) return;
+        this.isAiming = false;
+        this.graphics.clear();
+        this.gameState = 'FLYING';
+        const power = 1000;
+        this.frieza.setVelocity(Math.cos(this.currentAimAngle) * power, Math.sin(this.currentAimAngle) * power);
+        this.cameras.main.shake(200, 0.01);
+        this.trail.start();
+    }
+    hitObstacle(frieza, obstacle) {
+        obstacle.disableBody(true, true);
+        this.cameras.main.shake(300, 0.02);
+        let currentVel = frieza.body.velocity;
+        frieza.setVelocity(Math.max(currentVel.x * 1.3, 900), -350); 
+        this.cameras.main.flash(100, 255, 255, 255);
+        this.createExplosion(obstacle.x, obstacle.y, 0xFFD700);
+    }
+    onGroundHit() { if (Math.abs(this.frieza.body.velocity.y) > 100) this.cameras.main.shake(100, 0.005); }
+    createExplosion(x, y, color) {
+        let emitter = this.add.particles(x, y, 'energy_bit', {
+            speed: { min: 50, max: 250 }, angle: { min: 0, max: 360 }, scale: { start: 1, end: 0 },
+            blendMode: 'ADD', lifespan: 500, gravityY: 200, tint: color, quantity: 30
+        });
+        this.time.delayedCall(500, () => emitter.destroy());
+    }
+}
+
+class UIScene extends Phaser.Scene {
+    constructor() { super('UIScene'); }
+    create() {
+        this.scoreText = this.add.text(20, 20, '距離: 0 M', { fontSize: '24px', fontStyle: 'bold', color: '#FFF', stroke: '#000', strokeThickness: 4 });
+        let gameScene = this.scene.get('GameScene');
+        gameScene.events.on('updateScore', (score) => { this.scoreText.setText('距離: ' + score + ' M'); });
+        this.restartBtn = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY, '再戰一場', {
+            fontSize: '32px', backgroundColor: '#FF4500', padding: {x:20, y:10}, fontStyle: 'bold'
+        }).setOrigin(0.5).setInteractive().setVisible(false).on('pointerdown', () => {
+            this.scene.stop('GameScene'); this.scene.start('GameScene');
+        });
+    }
+    showRestart() { this.restartBtn.setVisible(true); }
+}
+
+const config = {
+    type: Phaser.AUTO, width: window.innerWidth, height: window.innerHeight, backgroundColor: '#222',
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    physics: { default: 'arcade', arcade: { gravity: { y: 600 }, debug: false } },
+    scene: [PreloadScene, TitleScene, GameScene, UIScene]
+};
+const game = new Phaser.Game(config);
+</script>
+</body>
+</html>
